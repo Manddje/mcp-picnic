@@ -115,6 +115,16 @@ Get product image data.
 
 Get the current shopping cart contents.
 
+#### `picnic_get_overview`
+
+Get a compact status overview in one call, without the cart's contents:
+
+- `cart`: `total_count`, `total_price` and `total_savings`
+- `selected_slot`: the selected delivery slot's window, cut-off time, minimum order value and `missing_for_minimum` (the minimum order value minus `total_price`, at least 0); `null` when no slot is selected
+- `current_deliveries`: each current delivery's ID, status, delivery window and, once Picnic has one, estimated arrival window
+
+Prices are in cents.
+
 #### `picnic_add_to_cart`
 
 Add a product to the shopping cart.

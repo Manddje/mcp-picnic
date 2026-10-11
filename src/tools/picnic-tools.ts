@@ -1896,6 +1896,83 @@ toolRegistry.register({
   },
 })
 
+// Overview tool
+//
+// Answers "where do things stand?" in one call: cart totals, the selected delivery slot and how
+// far the cart is from that slot's minimum order value, and deliveries under way. The full cart
+// contents and slot list stay with picnic_get_cart and picnic_get_delivery_slots.
+type Cart = Awaited<ReturnType<ReturnType<typeof getPicnicClient>["cart"]["getCart"]>>
+type Delivery = Awaited<
+  ReturnType<ReturnType<typeof getPicnicClient>["delivery"]["getDeliveries"]>
+>[number]
+
+/** The selected delivery slot, with how much the cart still lacks to reach its minimum. */
+function summarizeSelectedSlot(cart: Cart) {
+  const selection = cart.selected_slot
+  const slot =
+    cart.delivery_slots?.find((candidate) => candidate.slot_id === selection?.slot_id) ??
+    cart.delivery_slots?.find((candidate) => candidate.selected)
+  if (!slot) {
+    return selection?.slot_id ? { slot_id: selection.slot_id, state: selection.state } : null
+  }
+
+  const minimum = slot.minimum_order_value
+  return {
+    slot_id: slot.slot_id,
+    ...(selection?.state && { state: selection.state }),
+    window_start: slot.window_start,
+    window_end: slot.window_end,
+    cut_off_time: slot.cut_off_time,
+    ...(slot.is_available === false && { is_available: false }),
+    ...(minimum !== undefined && {
+      minimum_order_value: minimum,
+      missing_for_minimum: Math.max(0, minimum - (cart.total_price ?? 0)),
+    }),
+  }
+}
+
+/** A delivery's status and timing, without its orders. */
+function summarizeDelivery(delivery: Delivery) {
+  return {
+    delivery_id: delivery.delivery_id,
+    status: delivery.status,
+    window_start: delivery.slot?.window_start,
+    window_end: delivery.slot?.window_end,
+    // Picnic's estimated arrival window (eta2), once it has one.
+    ...(delivery.eta2 && { eta_start: delivery.eta2.start, eta_end: delivery.eta2.end }),
+  }
+}
+
+toolRegistry.register({
+  name: "picnic_get_overview",
+  description:
+    "Get a compact status overview in one call: cart totals (total_count, total_price, " +
+    "total_savings), the selected delivery slot (window, cut-off time, minimum order value and " +
+    "missing_for_minimum, the minimum minus total_price) and current deliveries (window, " +
+    "estimated arrival, status). Prices are in cents. Use picnic_get_cart for the cart's " +
+    "contents and picnic_get_delivery_slots for other slots.",
+  inputSchema: z.object({}),
+  annotations: READ_ONLY_ANNOTATIONS,
+  handler: async () => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const [cart, deliveries] = await Promise.all([
+      client.cart.getCart(),
+      client.delivery.getDeliveries(["CURRENT"]),
+    ])
+
+    return {
+      cart: {
+        total_count: cart.total_count,
+        total_price: cart.total_price,
+        total_savings: cart.total_savings,
+      },
+      selected_slot: summarizeSelectedSlot(cart),
+      current_deliveries: deliveries.map(summarizeDelivery),
+    }
+  },
+})
+
 // Add product to cart tool
 const addToCartInputSchema = z.object({
   productId: z.string().describe("The ID of the product to add"),

@@ -595,6 +595,7 @@ The server provides comprehensive access to Picnic's functionality through 30+ s
 ### Shopping Cart Management
 
 - **`picnic_get_cart`** - View current shopping cart contents and totals
+- **`picnic_get_overview`** - Cart totals, the selected delivery slot (with how much is missing to reach its minimum order value) and current deliveries in one call
 - **`picnic_add_to_cart`** - Add products to cart with specified quantities
 - **`picnic_remove_from_cart`** - Remove products from cart with specified quantities
 - **`picnic_clear_cart`** - Clear all items from the shopping cart
