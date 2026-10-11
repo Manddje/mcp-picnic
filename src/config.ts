@@ -27,6 +27,16 @@ const configSchema = z.object({
   HTTP_HOST: z.string().default("localhost"),
   HTTP_AUTH_TOKEN: z.string().optional(),
   HTTP_AUTH_HEADER_NAME: z.string().default("x-mcp-token"),
+  // Comma-separated browser origins allowed besides loopback pages; "*" allows any origin.
+  HTTP_ALLOWED_ORIGINS: z
+    .string()
+    .default("")
+    .transform((val) =>
+      val
+        .split(",")
+        .map((origin) => origin.trim())
+        .filter(Boolean),
+    ),
   PICNIC_SESSION_FILE: z.string().default(defaultSessionFile),
 })
 

@@ -1,5 +1,8 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, afterEach, vi } from "vitest"
 import { z } from "zod"
+
+// Keep a local .env from leaking into the config these tests load.
+vi.mock("dotenv", () => ({ default: { config: vi.fn() } }))
 
 /**
  * Regression tests for issue #10: PICNIC_COUNTRY_CODE environment variable not being used
@@ -184,5 +187,39 @@ describe("Config Schema - PICNIC_COUNTRY_CODE (Issue #10 regression)", () => {
 
       expect(result.HTTP_AUTH_HEADER_NAME).toBe("x-mcp-token")
     })
+  })
+})
+
+describe("Config Schema - HTTP transport settings", () => {
+  const HTTP_SETTINGS = ["HTTP_ALLOWED_ORIGINS"]
+
+  async function loadConfig(env: Record<string, string> = {}) {
+    vi.resetModules()
+    for (const name of HTTP_SETTINGS) {
+      vi.stubEnv(name, env[name])
+    }
+    const { config } = await import("../../src/config.js")
+    return config
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it("allows no extra browser origins by default", async () => {
+    const config = await loadConfig()
+
+    expect(config.HTTP_ALLOWED_ORIGINS).toEqual([])
+  })
+
+  it("reads allowed origins as a comma-separated list", async () => {
+    const config = await loadConfig({
+      HTTP_ALLOWED_ORIGINS: "https://app.example.com, http://192.168.1.20:8080,",
+    })
+
+    expect(config.HTTP_ALLOWED_ORIGINS).toEqual([
+      "https://app.example.com",
+      "http://192.168.1.20:8080",
+    ])
   })
 })

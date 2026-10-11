@@ -338,11 +338,12 @@ npm link
 ### Option 3: Docker / Docker Compose
 
 ```bash
-# 1) Create .env with your Picnic credentials
+# 1) Create .env with your Picnic credentials and a token for the HTTP endpoints
 cat > .env <<EOF
 PICNIC_USERNAME=your-picnic-email@example.com
 PICNIC_PASSWORD=your-picnic-password
 PICNIC_COUNTRY_CODE=NL
+HTTP_AUTH_TOKEN=replace-with-a-long-random-token
 EOF
 
 # 2) Build and start
@@ -392,12 +393,14 @@ PICNIC_COUNTRY_CODE=NL
 # HTTP Transport settings (optional)
 ENABLE_HTTP_SERVER=true
 HTTP_PORT=3000
-# Default is localhost. Use 0.0.0.0 for Docker/external access.
+# Default is localhost. Use 0.0.0.0 for Docker/external access (requires HTTP_AUTH_TOKEN).
 HTTP_HOST=0.0.0.0
-# Optional: protect HTTP endpoints with a shared token
+# Shared token for the HTTP endpoints: optional on localhost, required for any other HTTP_HOST
 HTTP_AUTH_TOKEN=replace-with-a-long-random-token
 # Optional: HTTP header name to accept token auth (default: x-mcp-token)
 HTTP_AUTH_HEADER_NAME=x-mcp-token
+# Optional: comma-separated browser origins to allow besides localhost pages ("*" allows any)
+HTTP_ALLOWED_ORIGINS=https://app.example.com
 
 # Session persistence (optional, strongly recommended in containers)
 PICNIC_SESSION_FILE=~/.picnic-session.json
@@ -450,6 +453,14 @@ curl -H "Authorization: Bearer YOUR_TOKEN" "http://localhost:3000/sessions"
 ```
 
 If the token is missing or invalid, the server responds with `401 Unauthorized`.
+
+#### HTTP Security
+
+The HTTP server listens only on `HTTP_HOST`, which defaults to `localhost`.
+
+- **Bound to `localhost`, `127.0.0.1` or `::1`**: only requests whose `Host` header names one of those addresses are accepted. This blocks DNS rebinding, where a website points its own domain at `127.0.0.1` to reach your local server through your browser. `HTTP_AUTH_TOKEN` is optional here.
+- **Bound to any other address** (such as `0.0.0.0` in Docker): the server refuses to start without `HTTP_AUTH_TOKEN`, because anyone who can reach that address could otherwise use your Picnic account.
+- **Browsers**: requests that carry an `Origin` header are only accepted from pages on `localhost`, `127.0.0.1` or `[::1]` (any port) and from the origins in `HTTP_ALLOWED_ORIGINS`; anything else gets `403 Forbidden`. Those origins can read the `Mcp-Session-Id` response header. Clients that don't run in a browser (curl, Node-based MCP clients) send no `Origin` and are unaffected.
 
 ### MCP Client Configuration
 
