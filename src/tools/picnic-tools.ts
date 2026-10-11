@@ -72,6 +72,15 @@ const CART_MUTATION_ANNOTATIONS = {
   openWorldHint: true,
 } as const
 
+// Annotations for tools that only read from Picnic: they change nothing, so a failed call is
+// safe to repeat.
+const READ_ONLY_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const
+
 // Helper function to filter cart data for LLM consumption
 function filterCartData(cart: unknown) {
   if (!cart || typeof cart !== "object") return cart
@@ -226,6 +235,48 @@ function extractPromotionsFromPage(page: unknown): PicnicPromotionProduct[] {
   return promotions
 }
 
+// How many Picnic requests a batch tool keeps in flight at once: enough to get through a batch
+// of 20-odd items quickly, without firing all of them at Picnic in the same instant.
+const BATCH_CONCURRENCY = 5
+
+/**
+ * Returns a runner that lets at most `max` of the tasks given to it run at the same time; the
+ * others wait, in order, for a free slot.
+ */
+function concurrencyLimit(max: number) {
+  let active = 0
+  const waiting: Array<() => void> = []
+  return async <T>(task: () => Promise<T>): Promise<T> => {
+    if (active < max) active++
+    else await new Promise<void>((resolve) => waiting.push(resolve))
+    try {
+      return await task()
+    } finally {
+      // Hand the slot straight to the next waiting task instead of freeing it, so a task
+      // arriving in between cannot take it as well.
+      const next = waiting.shift()
+      if (next) next()
+      else active--
+    }
+  }
+}
+
+// picnic-api does not export its domain types from the package root, so derive them.
+type CatalogService = ReturnType<typeof getPicnicClient>["catalog"]
+type SearchProduct = Awaited<ReturnType<CatalogService["search"]>>[number]
+
+/** The compact product fields the search tools return. */
+function toSearchResult(product: SearchProduct) {
+  return {
+    id: product.id,
+    name: product.name,
+    price: product.display_price,
+    unit: product.unit_quantity,
+    // Only include image_id if it exists, for potential image retrieval
+    ...(product.image_id && { image_id: product.image_id }),
+  }
+}
+
 // Search products tool
 const searchInputSchema = z.object({
   query: z.string().describe("Search query for products"),
@@ -257,14 +308,7 @@ toolRegistry.register({
     const paginatedResults = allResults.slice(startIndex, startIndex + limit)
 
     // Filter results to only include essential data for LLM
-    const filteredResults = paginatedResults.map((product) => ({
-      id: product.id,
-      name: product.name,
-      price: product.display_price,
-      unit: product.unit_quantity,
-      // Only include image_id if it exists, for potential image retrieval
-      ...(product.image_id && { image_id: product.image_id }),
-    }))
+    const filteredResults = paginatedResults.map(toSearchResult)
 
     return {
       query: args.query,
@@ -276,6 +320,58 @@ toolRegistry.register({
         total: allResults.length,
         hasMore: startIndex + limit < allResults.length,
       },
+    }
+  },
+})
+
+// Batch search tool
+//
+// Planning a week of meals means searching 20-odd ingredients; one call for all of them saves a
+// round trip per ingredient. Each query is searched on its own, so one failure loses only its
+// own results.
+const SEARCH_MANY_MAX_QUERIES = 25
+
+toolRegistry.register({
+  name: "picnic_search_many",
+  description:
+    "Search Picnic for several products in one call, e.g. all ingredients of a weekly menu, " +
+    "instead of calling picnic_search once per product. Returns the top results per query (id, " +
+    "name, price, unit, image_id) plus the query's total hit count, in input order. A query " +
+    "that fails gets an entry with its error and does not fail the others.",
+  inputSchema: z.object({
+    queries: z
+      .array(z.string().trim().min(1))
+      .min(1)
+      .max(SEARCH_MANY_MAX_QUERIES)
+      .describe(`Search queries, up to ${SEARCH_MANY_MAX_QUERIES}, e.g. ["kipfilet", "broccoli"].`),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(20)
+      .default(5)
+      .describe("Maximum number of results per query (1-20, default: 5)"),
+  }),
+  annotations: READ_ONLY_ANNOTATIONS,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const limit = args.limit ?? 5
+    const run = concurrencyLimit(BATCH_CONCURRENCY)
+    const settled = await Promise.allSettled(
+      args.queries.map((query) => run(() => client.catalog.search(query))),
+    )
+
+    return {
+      searches: settled.map((result, index) => {
+        const query = args.queries[index]
+        if (result.status === "rejected") return { query, error: getErrorMessage(result.reason) }
+        return {
+          query,
+          results: result.value.slice(0, limit).map(toSearchResult),
+          total: result.value.length,
+        }
+      }),
     }
   },
 })

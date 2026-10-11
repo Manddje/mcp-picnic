@@ -36,6 +36,17 @@ Search for products in Picnic.
 - `limit` (number, optional): Maximum number of results to return (1-20, default: 5)
 - `offset` (number, optional): Number of results to skip for pagination (default: 0)
 
+#### `picnic_search_many`
+
+Search for several products in one call, e.g. all ingredients of a weekly menu, instead of one `picnic_search` call per product. The queries run concurrently (at most five at a time).
+
+**Parameters:**
+
+- `queries` (array of strings): Search queries, up to 25
+- `limit` (number, optional): Maximum number of results per query (1-20, default: 5)
+
+**Returns:** One entry per query, in input order, with the same compact product fields as `picnic_search` (`id`, `name`, `price`, `unit`, `image_id`) and the query's `total` hit count. A query that fails gets an entry with its `error` instead; the other queries are unaffected.
+
 #### `picnic_get_promotions`
 
 Get Picnic's current weekly promotions/deals from the app's "Alle acties" page.
