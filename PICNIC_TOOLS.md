@@ -134,6 +134,8 @@ Get past and current deliveries.
 **Parameters:**
 
 - `filter` (array of strings, optional): Filter deliveries by status
+- `limit` (number, optional): Maximum number of deliveries to return (1-50, default: 10)
+- `offset` (number, optional): Number of deliveries to skip for pagination (default: 0)
 
 #### `picnic_get_delivery`
 
@@ -251,6 +253,7 @@ List recipes saved in the user's Picnic cookbook.
 
 **Parameters:**
 
+- `category` (string, optional): Ignored by this tool, which shares its input schema with `picnic_browse_recipes`
 - `limit` (number, optional): Maximum number of recipes to return (1-100, default: 25)
 - `offset` (number, optional): Number of recipes to skip for pagination (default: 0)
 
@@ -260,6 +263,7 @@ List user-created Picnic recipes.
 
 **Parameters:**
 
+- `category` (string, optional): Ignored by this tool, which shares its input schema with `picnic_browse_recipes`
 - `limit` (number, optional): Maximum number of recipes to return (1-100, default: 25)
 - `offset` (number, optional): Number of recipes to skip for pagination (default: 0)
 
@@ -317,9 +321,20 @@ Fetch structured ingredients for multiple recipes.
 
 Consolidate structured recipe ingredients into a shopping list.
 
+**Parameters:**
+
+- `recipes` (array): 1-20 recipes as returned by `picnic_get_recipe_ingredients`, or the `recipes` returned by `picnic_get_multiple_recipe_ingredients`
+
 #### `picnic_find_meal_combinations`
 
 Rank recipe combinations by shared non-pantry ingredients and optional budget.
+
+**Parameters:**
+
+- `recipes` (array): 2-50 recipes as returned by `picnic_get_recipe_ingredients`, or the `recipes` returned by `picnic_get_multiple_recipe_ingredients`
+- `count` (number): Number of recipes per combination (at least 2)
+- `topK` (number, optional): Maximum number of combinations to return (1-20, default: 5)
+- `maxTotalBudgetCents` (number, optional): Exclude combinations whose conservative shopping-list cost exceeds this many cents
 
 ### Own Recipes
 
