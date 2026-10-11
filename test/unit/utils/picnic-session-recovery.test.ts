@@ -9,6 +9,8 @@ vi.mock("fs/promises", () => ({
     readFile: vi.fn(),
     writeFile: vi.fn(),
     unlink: vi.fn(),
+    // saveSession restricts an existing session file before writing the new key.
+    chmod: vi.fn(),
   },
 }))
 
@@ -178,6 +180,7 @@ describe("picnic-client session recovery", () => {
       expect(fs.writeFile).toHaveBeenLastCalledWith(
         "picnic-session.json",
         JSON.stringify({ authKey: "key-2" }),
+        { mode: 0o600 },
       )
     })
 
@@ -246,8 +249,8 @@ describe("picnic-client session recovery", () => {
         /picnic_generate_2fa_code.*picnic_verify_2fa_code/,
       )
       expect(picnic.count("/cart/add_product")).toBe(1)
-      expect(fs.writeFile).not.toHaveBeenCalledWith(
-        "picnic-session.json",
+      // Compares the written data only, so the check holds whatever options saveSession passes.
+      expect(vi.mocked(fs.writeFile).mock.calls.map(([, data]) => data)).not.toContain(
         JSON.stringify({ authKey: "key-2" }),
       )
 
