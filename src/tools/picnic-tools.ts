@@ -1999,6 +1999,62 @@ toolRegistry.register({
   },
 })
 
+// Bulk add-to-cart tool
+//
+// Adds a whole shopping list in one request (POST /cart/products/add) instead of one
+// picnic_add_to_cart call per product.
+const ADD_PRODUCTS_MAX = 50
+
+toolRegistry.register({
+  name: "picnic_add_products_to_cart",
+  description:
+    "Add several products to the shopping cart in one request, e.g. a weekly shopping list, " +
+    "instead of calling picnic_add_to_cart per product. Repeated productIds are merged. " +
+    "Unverified: Picnic's bulk endpoint may set a product's cart quantity to `count` instead " +
+    "of adding `count` to what is already there. Until that is confirmed, check the quantities " +
+    "with picnic_get_cart afterwards, especially for products that were already in the cart. " +
+    "Not idempotent: if this fails, call picnic_get_cart to check whether the add landed " +
+    "before retrying.",
+  inputSchema: z.object({
+    products: z
+      .array(
+        z.object({
+          productId: z.string().min(1).describe("The ID of the product to add"),
+          count: z.number().int().min(1).default(1).describe("Number of items to add (default 1)"),
+        }),
+      )
+      .min(1)
+      .max(ADD_PRODUCTS_MAX)
+      .describe(`The products to add, up to ${ADD_PRODUCTS_MAX}.`),
+  }),
+  annotations: CART_MUTATION_ANNOTATIONS,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+
+    // The endpoint takes one quantity per product id, so a repeated product would keep only
+    // its last count; add the counts up instead.
+    const counts = new Map<string, number>()
+    for (const product of args.products) {
+      counts.set(product.productId, (counts.get(product.productId) ?? 0) + (product.count ?? 1))
+    }
+    const products = [...counts].map(([productId, quantity]) => ({ productId, quantity }))
+
+    const cart = await mutateCart(`Adding ${products.length} product(s) to cart`, () =>
+      client.cart.addProductsToCart(products),
+    )
+    return {
+      message: `Added ${products.length} product(s) to cart`,
+      // Repeated in the result, where the caller decides what to do next, until the endpoint's
+      // behaviour for products already in the cart is verified.
+      note:
+        "Unverified whether Picnic added these counts to quantities already in the cart or " +
+        "replaced them; check the quantities below.",
+      cart: filterCartData(cart),
+    }
+  },
+})
+
 // Remove product from cart tool
 const removeFromCartInputSchema = z.object({
   productId: z.string().describe("The ID of the product to remove"),

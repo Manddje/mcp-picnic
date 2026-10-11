@@ -134,6 +134,16 @@ Add a product to the shopping cart.
 - `productId` (string): The ID of the product to add
 - `count` (number, optional): Number of items to add (default: 1)
 
+#### `picnic_add_products_to_cart`
+
+Add several products to the shopping cart in one request (`POST /cart/products/add`). Repeated product IDs are merged. Returns the resulting cart.
+
+**Unverified:** it is not yet confirmed whether this endpoint adds `count` to a product already in the cart or sets its quantity to `count`. Until that is verified, check the quantities with `picnic_get_cart` afterwards, especially for products that were already in the cart. Like the other cart mutations it is not idempotent: if it fails, check the cart before retrying.
+
+**Parameters:**
+
+- `products` (array): Up to 50 products as `{ "productId": "s1001524", "count": 1 }`; `count` defaults to 1
+
 #### `picnic_remove_from_cart`
 
 Remove a product from the shopping cart.

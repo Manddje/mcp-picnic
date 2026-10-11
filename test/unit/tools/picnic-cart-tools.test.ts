@@ -3,6 +3,7 @@ import type { ToolResult } from "../../../src/tools/registry.js"
 
 const mocks = vi.hoisted(() => ({
   addProductToCart: vi.fn(),
+  addProductsToCart: vi.fn(),
   removeProductFromCart: vi.fn(),
   clearCart: vi.fn(),
   getCart: vi.fn(),
@@ -14,6 +15,7 @@ vi.mock("../../../src/utils/picnic-client.js", () => ({
   getPicnicClient: () => ({
     cart: {
       addProductToCart: mocks.addProductToCart,
+      addProductsToCart: mocks.addProductsToCart,
       removeProductFromCart: mocks.removeProductFromCart,
       clearCart: mocks.clearCart,
       getCart: mocks.getCart,
@@ -183,6 +185,109 @@ describe("picnic_get_cart quantities", () => {
 
     const cart = parseToolResult(await toolRegistry.executeTool("picnic_get_cart", {}))
     expect(cart.items[0].articles[0].quantity).toBe(1)
+  })
+})
+
+describe("picnic_add_products_to_cart", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    await import("../../../src/tools/picnic-tools.js")
+  })
+
+  function cartWith(lines: Array<{ productId: string; quantity: number }>) {
+    return {
+      type: "ORDER",
+      id: "shopping_cart",
+      total_count: lines.reduce((sum, line) => sum + line.quantity, 0),
+      items: lines.map((line, index) => ({
+        type: "ORDER_LINE",
+        id: `line-${index}`,
+        price: 100 * line.quantity,
+        items: [
+          {
+            id: line.productId,
+            name: `Product ${line.productId}`,
+            price: 100,
+            decorators: [{ type: "QUANTITY", quantity: line.quantity }],
+          },
+        ],
+      })),
+    }
+  }
+
+  it("adds all products in one request, merging repeated products", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+    mocks.addProductsToCart.mockResolvedValueOnce(
+      cartWith([
+        { productId: "s1", quantity: 3 },
+        { productId: "s2", quantity: 1 },
+      ]),
+    )
+
+    const payload = parseToolResult(
+      await toolRegistry.executeTool("picnic_add_products_to_cart", {
+        products: [{ productId: "s1", count: 2 }, { productId: "s2" }, { productId: "s1" }],
+      }),
+    )
+
+    // The endpoint keys quantities by product, so unmerged repeats would lose counts.
+    expect(mocks.addProductsToCart).toHaveBeenCalledTimes(1)
+    expect(mocks.addProductsToCart).toHaveBeenCalledWith([
+      { productId: "s1", quantity: 3 },
+      { productId: "s2", quantity: 1 },
+    ])
+    expect(mocks.addProductToCart).not.toHaveBeenCalled()
+    expect(payload.message).toBe("Added 2 product(s) to cart")
+    expect(
+      payload.cart.items.map((line: { articles: Array<Record<string, unknown>> }) => line.articles),
+    ).toEqual([
+      [expect.objectContaining({ product_id: "s1", quantity: 3 })],
+      [expect.objectContaining({ product_id: "s2", quantity: 1 })],
+    ])
+  })
+
+  it("warns that the cart may have changed when the bulk add fails, without retrying", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+    mocks.addProductsToCart.mockRejectedValueOnce(new Error("upstream detail"))
+
+    await expect(
+      toolRegistry.executeTool("picnic_add_products_to_cart", {
+        products: [{ productId: "s1" }, { productId: "s2" }],
+      }),
+    ).rejects.toThrow(/upstream detail.*may still have been modified.*picnic_get_cart/)
+    expect(mocks.addProductsToCart).toHaveBeenCalledTimes(1)
+  })
+
+  // Whether the endpoint adds to or replaces a quantity already in the cart is not verified
+  // yet, so the caller has to be told to check.
+  it("is a cart mutation whose description says to verify quantities with picnic_get_cart", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+    const tool = (
+      toolRegistry.getToolsList() as Array<{
+        name: string
+        description: string
+        annotations?: Record<string, boolean>
+      }>
+    ).find((candidate) => candidate.name === "picnic_add_products_to_cart")
+
+    expect(tool?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+    })
+    expect(tool?.description).toMatch(/unverified/i)
+    expect(tool?.description).toMatch(/check the quantities with picnic_get_cart/)
+  })
+
+  it("rejects an empty list and counts below one before calling Picnic", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+
+    for (const products of [[], [{ productId: "s1", count: 0 }]]) {
+      await expect(
+        toolRegistry.executeTool("picnic_add_products_to_cart", { products }),
+      ).rejects.toThrow(/Invalid input/)
+    }
+    expect(mocks.addProductsToCart).not.toHaveBeenCalled()
   })
 })
 
