@@ -1,6 +1,8 @@
 export interface PromptResult {
+  // MCP prompt messages have no "system" role: the SDK client validates the result against
+  // the protocol schema and rejects a prompt that uses one.
   messages: Array<{
-    role: "user" | "assistant" | "system"
+    role: "user" | "assistant"
     content: {
       type: "text"
       text: string

@@ -75,11 +75,34 @@ async function loadSession(): Promise<string | null> {
   }
 }
 
+// The session file holds the auth key, which grants full access to the Picnic account.
+const SESSION_FILE_MODE = 0o600
+
+/**
+ * Restricts an existing session file to its owner.
+ *
+ * writeFile applies its `mode` only when it creates the file, so a session file written earlier
+ * with default permissions (0644 under a normal umask) would stay readable by other users. A
+ * failure is logged rather than thrown, so it never stops the session from being saved.
+ */
+async function restrictSessionFile(): Promise<void> {
+  try {
+    await fs.chmod(config.PICNIC_SESSION_FILE, SESSION_FILE_MODE)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return
+    console.error(`Could not restrict the permissions of ${config.PICNIC_SESSION_FILE}:`, error)
+  }
+}
+
 export async function saveSession(): Promise<void> {
   if (!picnicClientInstance) return
   const authKey = picnicClientInstance.authKey
   if (authKey) {
-    await fs.writeFile(config.PICNIC_SESSION_FILE, JSON.stringify({ authKey }))
+    // Tighten an existing file before the new key is written into it.
+    await restrictSessionFile()
+    await fs.writeFile(config.PICNIC_SESSION_FILE, JSON.stringify({ authKey }), {
+      mode: SESSION_FILE_MODE,
+    })
   }
 }
 

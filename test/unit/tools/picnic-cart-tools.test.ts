@@ -120,14 +120,87 @@ describe("picnic cart tools", () => {
       }
     })
 
-    it("leaves read-only tools unannotated", async () => {
+    async function annotationsByTool() {
       const { toolRegistry } = await import("../../../src/tools/registry.js")
       const list = toolRegistry.getToolsList() as Array<{
         name: string
         annotations?: Record<string, boolean>
       }>
+      return new Map(list.map((tool) => [tool.name, tool.annotations]))
+    }
 
-      expect(list.find((t) => t.name === "picnic_get_cart")?.annotations).toBeUndefined()
+    // Without an explicit hint a client has to treat every tool as a possibly destructive write.
+    it("declares readOnlyHint on every tool", async () => {
+      for (const [name, annotations] of await annotationsByTool()) {
+        expect(typeof annotations?.readOnlyHint, `${name} should declare readOnlyHint`).toBe(
+          "boolean",
+        )
+      }
+    })
+
+    it("marks lookups as read-only and safe to retry", async () => {
+      const annotations = await annotationsByTool()
+      const lookups = [...annotations.keys()].filter((name) => name.startsWith("picnic_get_"))
+      expect(lookups).toContain("picnic_get_cart")
+
+      for (const name of [...lookups, "picnic_search", "picnic_browse_recipes"]) {
+        expect(annotations.get(name), name).toMatchObject({
+          readOnlyHint: true,
+          idempotentHint: true,
+          openWorldHint: true,
+        })
+      }
+    })
+
+    it("marks the local meal-planning tools as read-only and closed-world", async () => {
+      const annotations = await annotationsByTool()
+
+      for (const name of ["picnic_build_shopping_list", "picnic_find_meal_combinations"]) {
+        expect(annotations.get(name), name).toMatchObject({
+          readOnlyHint: true,
+          idempotentHint: true,
+          openWorldHint: false,
+        })
+      }
+    })
+
+    it("marks cancelling a delivery as destructive and not idempotent", async () => {
+      expect((await annotationsByTool()).get("picnic_cancel_delivery")).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+      })
+    })
+
+    it("annotates the other delivery and recipe-saving writes by their side effects", async () => {
+      const annotations = await annotationsByTool()
+
+      expect(annotations.get("picnic_set_delivery_slot")).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+      })
+      expect(annotations.get("picnic_rate_delivery")).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+      })
+      // Every call sends another email.
+      expect(annotations.get("picnic_send_delivery_invoice_email")).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+      })
+      expect(annotations.get("picnic_save_recipe")).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+      })
+      expect(annotations.get("picnic_unsave_recipe")).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+      })
     })
   })
 })

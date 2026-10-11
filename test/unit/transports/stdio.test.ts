@@ -76,7 +76,7 @@ describe("StdioServer", () => {
 
       expect(StdioServerTransport).toHaveBeenCalledTimes(1)
       expect(mockServer.connect).toHaveBeenCalledWith(mockTransport)
-      expect(console.error).toHaveBeenCalledWith("MCP Server Template running on stdio")
+      expect(console.error).toHaveBeenCalledWith("Picnic MCP server running on stdio")
       expect(stdioServer["transport"]).toBe(mockTransport)
     })
 
@@ -223,13 +223,13 @@ describe("StdioServer", () => {
   describe("console output", () => {
     it("should log startup message", async () => {
       await stdioServer.start()
-      expect(console.error).toHaveBeenCalledWith("MCP Server Template running on stdio")
+      expect(console.error).toHaveBeenCalledWith("Picnic MCP server running on stdio")
     })
 
     it("should only log startup message once per start", async () => {
       await stdioServer.start()
       expect(console.error).toHaveBeenCalledTimes(1)
-      expect(console.error).toHaveBeenCalledWith("MCP Server Template running on stdio")
+      expect(console.error).toHaveBeenCalledWith("Picnic MCP server running on stdio")
     })
   })
 })

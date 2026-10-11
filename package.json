@@ -1,7 +1,7 @@
 {
   "name": "mcp-picnic",
   "version": "1.0.1",
-  "description": "Model Context Protocol (MCP) server template for Picnic, order your groceries using AI",
+  "description": "Model Context Protocol (MCP) server for Picnic: search products, plan meals with recipes and fill your cart using AI",
   "license": "MIT",
   "type": "module",
   "main": "./dist/bundle.js",
@@ -13,6 +13,7 @@
     "access": "public"
   },
   "bin": {
+    "mcp-picnic": "bin/mcp-server.js",
     "mcp-server-template": "bin/mcp-server.js"
   },
   "files": [
@@ -22,8 +23,8 @@
   "scripts": {
     "build": "node build.js",
     "clean": "rm -rf dist",
-    "lint": "eslint src/**/*.ts",
-    "lint:fix": "eslint --fix src/**/*.ts",
+    "lint": "eslint \"src/**/*.ts\"",
+    "lint:fix": "eslint --fix \"src/**/*.ts\"",
     "watch": "tsc --watch",
     "dev": "nodemon --watch src -e ts --exec 'npm run build'",
     "typecheck": "tsc --noEmit",

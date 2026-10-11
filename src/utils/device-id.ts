@@ -29,7 +29,8 @@ export async function resolveDeviceId(): Promise<string> {
 
   const deviceId = crypto.randomBytes(8).toString("hex").toUpperCase()
   try {
-    await fs.writeFile(config.PICNIC_DEVICE_FILE, JSON.stringify({ deviceId }))
+    // Owner-only, like the session file: the id identifies this install to Picnic.
+    await fs.writeFile(config.PICNIC_DEVICE_FILE, JSON.stringify({ deviceId }), { mode: 0o600 })
   } catch {
     // If persistence fails, still use the generated id for this run.
   }

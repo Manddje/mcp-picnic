@@ -482,7 +482,7 @@ The legacy `picnic_get_lists`, `picnic_get_list`, and `picnic_get_mgm_details` t
 ## Important Notes
 
 - **Authentication**: Authentication is handled automatically using environment variables (`PICNIC_USERNAME` and `PICNIC_PASSWORD`)
-- **Country Support**: Currently supports Netherlands (NL) and Germany (DE)
+- **Country Support**: Supports the Netherlands (NL), Germany (DE) and France (FR)
 - **Rate Limiting**: Be mindful of API rate limits when making frequent requests
 - **Security**: Credentials are read from environment variables and used to authenticate automatically when tools are called
 - **No ordering**: Placing orders is deliberately not supported. The tools can fill the cart and pick a delivery slot, but checking out and paying always happen in the Picnic app
