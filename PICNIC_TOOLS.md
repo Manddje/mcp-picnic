@@ -176,6 +176,22 @@ Rate a completed delivery.
 - `deliveryId` (string): The ID of the delivery to rate
 - `rating` (number): Rating from 0 to 10
 
+#### `picnic_send_delivery_invoice_email`
+
+Send or resend the invoice email for a completed delivery. Not idempotent: every call sends another email.
+
+**Parameters:**
+
+- `deliveryId` (string): The ID of the delivery to send the invoice email for
+
+#### `picnic_get_order_status`
+
+Get the status of an order (not a delivery). Picnic answers with a `checkout_status`, for example `FINISHED`. Order IDs are the `orders[].id` values in the results of `picnic_get_deliveries` and `picnic_get_delivery`.
+
+**Parameters:**
+
+- `orderId` (string): The ID of the order to get the status for
+
 ### User Information
 
 #### `picnic_get_user_details`
