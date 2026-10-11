@@ -6,6 +6,7 @@ vi.mock("fs/promises", () => ({
   default: {
     readFile: vi.fn(),
     writeFile: vi.fn(),
+    chmod: vi.fn(),
     unlink: vi.fn(),
   },
 }))
@@ -99,6 +100,7 @@ describe("picnic-client session persistence", () => {
       expect(fs.writeFile).toHaveBeenCalledWith(
         "picnic-session.json",
         expect.stringContaining("authKey"),
+        { mode: 0o600 },
       )
     })
 
@@ -112,9 +114,8 @@ describe("picnic-client session persistence", () => {
       expect(() => getPicnicClient()).not.toThrow()
       // The device-id resolver may persist a generated id, but no session
       // should be written while 2FA is still pending.
-      expect(fs.writeFile).not.toHaveBeenCalledWith(
+      expect(vi.mocked(fs.writeFile).mock.calls.map(([file]) => file)).not.toContain(
         "picnic-session.json",
-        expect.anything(),
       )
     })
 
@@ -126,9 +127,8 @@ describe("picnic-client session persistence", () => {
 
       await expect(initializePicnicClient()).resolves.toBeUndefined()
       expect(() => getPicnicClient()).not.toThrow()
-      expect(fs.writeFile).not.toHaveBeenCalledWith(
+      expect(vi.mocked(fs.writeFile).mock.calls.map(([file]) => file)).not.toContain(
         "picnic-session.json",
-        expect.anything(),
       )
     })
 
@@ -140,9 +140,8 @@ describe("picnic-client session persistence", () => {
 
       await expect(initializePicnicClient()).resolves.toBeUndefined()
       expect(() => getPicnicClient()).not.toThrow()
-      expect(fs.writeFile).not.toHaveBeenCalledWith(
+      expect(vi.mocked(fs.writeFile).mock.calls.map(([file]) => file)).not.toContain(
         "picnic-session.json",
-        expect.anything(),
       )
     })
 
@@ -165,6 +164,51 @@ describe("picnic-client session persistence", () => {
       await saveSession()
 
       expect(fs.writeFile).not.toHaveBeenCalled()
+    })
+
+    // The auth key must never land in a file other users can read, even for one write.
+    it("should restrict an existing session file before writing the new key into it", async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"))
+      mockLogin.mockResolvedValue(undefined)
+      vi.mocked(fs.writeFile).mockResolvedValue(undefined)
+
+      const { initializePicnicClient } = await importClient()
+      await initializePicnicClient()
+
+      expect(fs.chmod).toHaveBeenCalledWith("picnic-session.json", 0o600)
+      const sessionWrite = vi
+        .mocked(fs.writeFile)
+        .mock.calls.findIndex(([file]) => file === "picnic-session.json")
+      expect(vi.mocked(fs.chmod).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(fs.writeFile).mock.invocationCallOrder[sessionWrite],
+      )
+    })
+
+    it("should still save the session when its permissions cannot be changed", async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(new Error("ENOENT"))
+      mockLogin.mockResolvedValue(undefined)
+      vi.mocked(fs.writeFile).mockResolvedValue(undefined)
+      vi.mocked(fs.chmod).mockRejectedValueOnce(
+        Object.assign(new Error("operation not permitted"), { code: "EPERM" }),
+      )
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {})
+
+      try {
+        const { initializePicnicClient } = await importClient()
+        await initializePicnicClient()
+
+        expect(consoleError).toHaveBeenCalledWith(
+          expect.stringContaining("Could not restrict the permissions of picnic-session.json"),
+          expect.any(Error),
+        )
+        expect(fs.writeFile).toHaveBeenCalledWith(
+          "picnic-session.json",
+          expect.stringContaining("authKey"),
+          { mode: 0o600 },
+        )
+      } finally {
+        consoleError.mockRestore()
+      }
     })
   })
 

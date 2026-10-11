@@ -1,188 +1,86 @@
-import { describe, it, expect } from "vitest"
-import { z } from "zod"
+import { afterEach, describe, expect, it, vi } from "vitest"
+
+// Keep a local .env from leaking into the config these tests load.
+vi.mock("dotenv", () => ({ default: { config: vi.fn() } }))
 
 /**
- * Regression tests for issue #10: PICNIC_COUNTRY_CODE environment variable not being used
- *
- * Issue: The country code was hardcoded to "NL" in the codebase, causing authentication
- * failures for users from other countries (e.g., Germany with "DE").
- *
- * Fix: Added PICNIC_COUNTRY_CODE to config schema and updated all initializePicnicClient
- * calls to use the config value.
+ * Loads src/config.ts afresh, as the server does at start, after setting the given environment
+ * variables. A value of undefined removes the variable.
  */
-describe("Config Schema - PICNIC_COUNTRY_CODE (Issue #10 regression)", () => {
-  // Create a standalone config schema for testing (matches the actual implementation)
-  const configSchema = z.object({
-    PICNIC_USERNAME: z.string(),
-    PICNIC_PASSWORD: z.string(),
-    PICNIC_COUNTRY_CODE: z.enum(["NL", "DE"]).default("NL"),
-    ENABLE_HTTP_SERVER: z
-      .string()
-      .transform((val) => val === "true")
-      .default("false"),
-    HTTP_PORT: z
-      .string()
-      .transform((val) => parseInt(val, 10))
-      .default("3000"),
-    HTTP_HOST: z.string().default("localhost"),
-    HTTP_AUTH_TOKEN: z.string().optional(),
-    HTTP_AUTH_HEADER_NAME: z.string().default("x-mcp-token"),
+async function loadConfig(env: Record<string, string | undefined>) {
+  for (const [name, value] of Object.entries(env)) {
+    vi.stubEnv(name, value)
+  }
+  vi.resetModules()
+  const { config } = await import("../../src/config.js")
+  return config
+}
+
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
+
+/**
+ * Regression tests for issue #10: the country code was hardcoded to NL, so logins failed for
+ * accounts from other countries (e.g. Germany with "DE").
+ */
+describe("PICNIC_COUNTRY_CODE", () => {
+  it("defaults to NL, so setups without it keep working", async () => {
+    const config = await loadConfig({ PICNIC_COUNTRY_CODE: undefined })
+
+    expect(config.PICNIC_COUNTRY_CODE).toBe("NL")
   })
 
-  describe("PICNIC_COUNTRY_CODE validation", () => {
-    it("should default to NL when PICNIC_COUNTRY_CODE is not set", () => {
-      const result = configSchema.parse({
-        PICNIC_USERNAME: "test-user",
-        PICNIC_PASSWORD: "test-pass",
-        // PICNIC_COUNTRY_CODE not provided
-      })
+  it.each(["NL", "DE", "FR"])("accepts %s", async (code) => {
+    const config = await loadConfig({ PICNIC_COUNTRY_CODE: code })
 
-      expect(result.PICNIC_COUNTRY_CODE).toBe("NL")
-    })
-
-    it("should accept NL as PICNIC_COUNTRY_CODE", () => {
-      const result = configSchema.parse({
-        PICNIC_USERNAME: "test-user",
-        PICNIC_PASSWORD: "test-pass",
-        PICNIC_COUNTRY_CODE: "NL",
-      })
-
-      expect(result.PICNIC_COUNTRY_CODE).toBe("NL")
-    })
-
-    it("should accept DE as PICNIC_COUNTRY_CODE", () => {
-      const result = configSchema.parse({
-        PICNIC_USERNAME: "test-user",
-        PICNIC_PASSWORD: "test-pass",
-        PICNIC_COUNTRY_CODE: "DE",
-      })
-
-      expect(result.PICNIC_COUNTRY_CODE).toBe("DE")
-    })
-
-    it("should reject invalid country codes", () => {
-      expect(() => {
-        configSchema.parse({
-          PICNIC_USERNAME: "test-user",
-          PICNIC_PASSWORD: "test-pass",
-          PICNIC_COUNTRY_CODE: "FR", // Invalid country code
-        })
-      }).toThrow()
-    })
-
-    it("should reject empty string as PICNIC_COUNTRY_CODE", () => {
-      expect(() => {
-        configSchema.parse({
-          PICNIC_USERNAME: "test-user",
-          PICNIC_PASSWORD: "test-pass",
-          PICNIC_COUNTRY_CODE: "",
-        })
-      }).toThrow()
-    })
-
-    it("should reject numeric values as PICNIC_COUNTRY_CODE", () => {
-      expect(() => {
-        configSchema.parse({
-          PICNIC_USERNAME: "test-user",
-          PICNIC_PASSWORD: "test-pass",
-          PICNIC_COUNTRY_CODE: 123,
-        })
-      }).toThrow()
-    })
-
-    it("should reject null as PICNIC_COUNTRY_CODE", () => {
-      expect(() => {
-        configSchema.parse({
-          PICNIC_USERNAME: "test-user",
-          PICNIC_PASSWORD: "test-pass",
-          PICNIC_COUNTRY_CODE: null,
-        })
-      }).toThrow()
-    })
-
-    it("should handle lowercase country codes by rejecting them", () => {
-      // Country codes should be uppercase only
-      expect(() => {
-        configSchema.parse({
-          PICNIC_USERNAME: "test-user",
-          PICNIC_PASSWORD: "test-pass",
-          PICNIC_COUNTRY_CODE: "nl",
-        })
-      }).toThrow()
-    })
+    expect(config.PICNIC_COUNTRY_CODE).toBe(code)
   })
 
-  describe("Integration with actual config", () => {
-    it("should have PICNIC_COUNTRY_CODE in the actual config object", async () => {
-      // Import the actual config to verify it has the field
-      const { config } = await import("../../src/config.js")
+  // Codes are uppercase only, and an empty value does not fall back to NL.
+  it.each(["BE", "nl", "", "123"])("rejects %j", async (code) => {
+    await expect(loadConfig({ PICNIC_COUNTRY_CODE: code })).rejects.toThrow("PICNIC_COUNTRY_CODE")
+  })
+})
 
-      // Verify that the config object has the PICNIC_COUNTRY_CODE property
-      expect(config).toHaveProperty("PICNIC_COUNTRY_CODE")
+describe("Picnic credentials", () => {
+  it.each(["PICNIC_USERNAME", "PICNIC_PASSWORD"])("requires %s", async (name) => {
+    await expect(loadConfig({ [name]: undefined })).rejects.toThrow(name)
+  })
+})
 
-      // Verify it's one of the valid values
-      expect(["NL", "DE"]).toContain(config.PICNIC_COUNTRY_CODE)
-    })
+// A cancelled delivery cannot be restored, so only an explicit "true" offers the cancel tool.
+describe("PICNIC_ENABLE_CANCEL_DELIVERY", () => {
+  it("defaults to false", async () => {
+    const config = await loadConfig({ PICNIC_ENABLE_CANCEL_DELIVERY: undefined })
+
+    expect(config.PICNIC_ENABLE_CANCEL_DELIVERY).toBe(false)
   })
 
-  describe("Backward compatibility", () => {
-    it("should maintain backward compatibility with NL default", () => {
-      // When PICNIC_COUNTRY_CODE is not provided, it should default to NL
-      // This ensures existing users without the env var continue to work
-      const result = configSchema.parse({
-        PICNIC_USERNAME: "test-user",
-        PICNIC_PASSWORD: "test-pass",
-      })
+  it.each([
+    ["true", true],
+    ["false", false],
+    ["TRUE", false],
+    ["1", false],
+    ["yes", false],
+    ["", false],
+  ])("reads %j as %s", async (value, expected) => {
+    const config = await loadConfig({ PICNIC_ENABLE_CANCEL_DELIVERY: value })
 
-      expect(result.PICNIC_COUNTRY_CODE).toBe("NL")
-    })
+    expect(config.PICNIC_ENABLE_CANCEL_DELIVERY).toBe(expected)
+  })
+})
+
+describe("HTTP authentication", () => {
+  it("does not require HTTP_AUTH_TOKEN", async () => {
+    const config = await loadConfig({ HTTP_AUTH_TOKEN: undefined })
+
+    expect(config.HTTP_AUTH_TOKEN).toBeUndefined()
   })
 
-  describe("Required fields validation", () => {
-    it("should require PICNIC_USERNAME", () => {
-      expect(() => {
-        configSchema.parse({
-          PICNIC_PASSWORD: "test-pass",
-          PICNIC_COUNTRY_CODE: "NL",
-        })
-      }).toThrow()
-    })
+  it("defaults HTTP_AUTH_HEADER_NAME to x-mcp-token", async () => {
+    const config = await loadConfig({ HTTP_AUTH_HEADER_NAME: undefined })
 
-    it("should require PICNIC_PASSWORD", () => {
-      expect(() => {
-        configSchema.parse({
-          PICNIC_USERNAME: "test-user",
-          PICNIC_COUNTRY_CODE: "NL",
-        })
-      }).toThrow()
-    })
-
-    it("should not require PICNIC_COUNTRY_CODE due to default", () => {
-      // Should not throw - PICNIC_COUNTRY_CODE has a default value
-      expect(() => {
-        configSchema.parse({
-          PICNIC_USERNAME: "test-user",
-          PICNIC_PASSWORD: "test-pass",
-        })
-      }).not.toThrow()
-    })
-
-    it("should not require HTTP_AUTH_TOKEN", () => {
-      expect(() => {
-        configSchema.parse({
-          PICNIC_USERNAME: "test-user",
-          PICNIC_PASSWORD: "test-pass",
-        })
-      }).not.toThrow()
-    })
-
-    it("should default HTTP_AUTH_HEADER_NAME", () => {
-      const result = configSchema.parse({
-        PICNIC_USERNAME: "test-user",
-        PICNIC_PASSWORD: "test-pass",
-      })
-
-      expect(result.HTTP_AUTH_HEADER_NAME).toBe("x-mcp-token")
-    })
+    expect(config.HTTP_AUTH_HEADER_NAME).toBe("x-mcp-token")
   })
 })

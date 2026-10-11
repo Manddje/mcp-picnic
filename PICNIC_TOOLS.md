@@ -134,6 +134,8 @@ Get past and current deliveries.
 **Parameters:**
 
 - `filter` (array of strings, optional): Filter deliveries by status
+- `limit` (number, optional): Maximum number of deliveries to return (1-50, default: 10)
+- `offset` (number, optional): Number of deliveries to skip for pagination (default: 0)
 
 #### `picnic_get_delivery`
 
@@ -161,7 +163,7 @@ Get driver and route information for a delivery.
 
 #### `picnic_cancel_delivery`
 
-Cancel a delivery order.
+Cancel a delivery order. A cancelled delivery cannot be restored, so this tool is only available when `PICNIC_ENABLE_CANCEL_DELIVERY=true` is set.
 
 **Parameters:**
 
@@ -175,6 +177,22 @@ Rate a completed delivery.
 
 - `deliveryId` (string): The ID of the delivery to rate
 - `rating` (number): Rating from 0 to 10
+
+#### `picnic_send_delivery_invoice_email`
+
+Send or resend the invoice email for a completed delivery. Not idempotent: every call sends another email.
+
+**Parameters:**
+
+- `deliveryId` (string): The ID of the delivery to send the invoice email for
+
+#### `picnic_get_order_status`
+
+Get the status of an order (not a delivery). Picnic answers with a `checkout_status`, for example `FINISHED`. Order IDs are the `orders[].id` values in the results of `picnic_get_deliveries` and `picnic_get_delivery`.
+
+**Parameters:**
+
+- `orderId` (string): The ID of the order to get the status for
 
 ### User Information
 
@@ -235,6 +253,7 @@ List recipes saved in the user's Picnic cookbook.
 
 **Parameters:**
 
+- `category` (string, optional): Ignored by this tool, which shares its input schema with `picnic_browse_recipes`
 - `limit` (number, optional): Maximum number of recipes to return (1-100, default: 25)
 - `offset` (number, optional): Number of recipes to skip for pagination (default: 0)
 
@@ -244,6 +263,7 @@ List user-created Picnic recipes.
 
 **Parameters:**
 
+- `category` (string, optional): Ignored by this tool, which shares its input schema with `picnic_browse_recipes`
 - `limit` (number, optional): Maximum number of recipes to return (1-100, default: 25)
 - `offset` (number, optional): Number of recipes to skip for pagination (default: 0)
 
@@ -301,9 +321,20 @@ Fetch structured ingredients for multiple recipes.
 
 Consolidate structured recipe ingredients into a shopping list.
 
+**Parameters:**
+
+- `recipes` (array): 1-20 recipes as returned by `picnic_get_recipe_ingredients`, or the `recipes` returned by `picnic_get_multiple_recipe_ingredients`
+
 #### `picnic_find_meal_combinations`
 
 Rank recipe combinations by shared non-pantry ingredients and optional budget.
+
+**Parameters:**
+
+- `recipes` (array): 2-50 recipes as returned by `picnic_get_recipe_ingredients`, or the `recipes` returned by `picnic_get_multiple_recipe_ingredients`
+- `count` (number): Number of recipes per combination (at least 2)
+- `topK` (number, optional): Maximum number of combinations to return (1-20, default: 5)
+- `maxTotalBudgetCents` (number, optional): Exclude combinations whose conservative shopping-list cost exceeds this many cents
 
 ### Own Recipes
 
@@ -482,7 +513,7 @@ The legacy `picnic_get_lists`, `picnic_get_list`, and `picnic_get_mgm_details` t
 ## Important Notes
 
 - **Authentication**: Authentication is handled automatically using environment variables (`PICNIC_USERNAME` and `PICNIC_PASSWORD`)
-- **Country Support**: Currently supports Netherlands (NL) and Germany (DE)
+- **Country Support**: Supports the Netherlands (NL), Germany (DE) and France (FR)
 - **Rate Limiting**: Be mindful of API rate limits when making frequent requests
 - **Security**: Credentials are read from environment variables and used to authenticate automatically when tools are called
 - **No ordering**: Placing orders is deliberately not supported. The tools can fill the cart and pick a delivery slot, but checking out and paying always happen in the Picnic app

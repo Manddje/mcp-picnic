@@ -17,9 +17,9 @@ startCommand:
         description: Your Picnic account password
       picnicCountryCode:
         type: string
-        description: Country code for Picnic (NL or DE)
+        description: Country code for Picnic (NL, DE or FR)
         default: "NL"
-        enum: ["NL", "DE"]
+        enum: ["NL", "DE", "FR"]
       enableHttpServer:
         type: boolean
         description: Enable HTTP server mode

@@ -72,6 +72,22 @@ const CART_MUTATION_ANNOTATIONS = {
   openWorldHint: true,
 } as const
 
+// Annotations for tools that only read from Picnic: safe to call again after a failure.
+const READ_ONLY_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const
+
+// Annotations for tools that only compute over their input, without calling Picnic.
+const LOCAL_READ_ONLY_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const
+
 // Helper function to filter cart data for LLM consumption
 function filterCartData(cart: unknown) {
   if (!cart || typeof cart !== "object") return cart
@@ -246,6 +262,7 @@ toolRegistry.register({
   name: "picnic_search",
   description: "Search for products in Picnic with pagination and filtered results",
   inputSchema: searchInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -302,6 +319,7 @@ toolRegistry.register({
     "Returns promoted products with current price, promotion label, original price when shown, " +
     "and pagination.",
   inputSchema: promotionsInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -343,6 +361,7 @@ toolRegistry.register({
   name: "picnic_get_suggestions",
   description: "Get product suggestions based on a query",
   inputSchema: suggestionsInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -378,6 +397,7 @@ toolRegistry.register({
     "Set full=true for complete details including description, allergens, ingredients, and similar products. " +
     "Use this to resolve opaque product IDs from cart or order history.",
   inputSchema: productDetailsInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -411,6 +431,7 @@ toolRegistry.register({
   description:
     "Get a product image by image ID and size. Returns the image itself as MCP image content.",
   inputSchema: imageInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -460,6 +481,7 @@ toolRegistry.register({
       .default(20000)
       .describe("Maximum number of characters to return (1000-100000, default 20000)."),
   }),
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -657,6 +679,7 @@ toolRegistry.register({
     "and the canonical source URL. Accepts short share links (picnic.app/de/go/xxx), full " +
     "recipe URLs, or bare recipe IDs. Optionally render it for a different number of portions.",
   inputSchema: getRecipeInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -703,6 +726,7 @@ toolRegistry.register({
     "paginated list of recipes (id, name, image URL, cookbook section, source URL) and " +
     "category page IDs when available. Use the recipeId with picnic_get_recipe for full details.",
   inputSchema: recipeListInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -724,6 +748,7 @@ toolRegistry.register({
     "'Gespeichert' tab), distinct from the public discovery feed. Returns id, name, image URL " +
     "and source URL — useful for importing saved recipes elsewhere.",
   inputSchema: recipeListInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -739,6 +764,7 @@ toolRegistry.register({
     "List the user's own recipes (the cookbook 'Eigene Rezepte' tab — user-created recipes). " +
     "Returns id, name, image URL and source URL.",
   inputSchema: recipeListInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -760,6 +786,13 @@ toolRegistry.register({
   name: "picnic_save_recipe",
   description: "Save a recipe to the user's Picnic cookbook, by URL or recipe ID.",
   inputSchema: recipeRefInputSchema,
+  // Saving a recipe that is already saved changes nothing.
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -778,6 +811,13 @@ toolRegistry.register({
   name: "picnic_unsave_recipe",
   description: "Remove a recipe from the user's Picnic cookbook, by URL or recipe ID.",
   inputSchema: recipeRefInputSchema,
+  // Removes the recipe from the cookbook; removing it again changes nothing.
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1040,6 +1080,7 @@ toolRegistry.register({
           "Set to false if those lookups fail.",
       ),
   }),
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1383,6 +1424,7 @@ toolRegistry.register({
     "List the images Picnic suggests for one of the user's own recipes. Pick one with " +
     "picnic_set_recipe_image.",
   inputSchema: z.object({ recipe_url_or_id: ownRecipeRefSchema }),
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1517,6 +1559,7 @@ toolRegistry.register({
     "Fetch structured Picnic recipe ingredients by recipe URL or ID. Returns selling-unit IDs, " +
     "quantities, pantry flags, package display text, and prices for meal planning.",
   inputSchema: recipeIngredientsInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     return fetchRecipeIngredientsByRef(getPicnicClient(), args.recipe_url_or_id, args.portions)
@@ -1535,6 +1578,7 @@ toolRegistry.register({
       .max(20)
       .describe("Picnic recipe URLs or 24-/32-character recipe IDs, up to 20."),
   }),
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1578,6 +1622,7 @@ toolRegistry.register({
   inputSchema: z.object({
     recipes: z.array(structuredRecipeIngredientsSchema).min(1).max(20),
   }),
+  annotations: LOCAL_READ_ONLY_ANNOTATIONS,
   handler: async (args) => buildShoppingList(args.recipes),
 })
 
@@ -1603,6 +1648,7 @@ toolRegistry.register({
       .optional()
       .describe("Exclude combinations whose conservative shopping-list cost exceeds this."),
   }),
+  annotations: LOCAL_READ_ONLY_ANNOTATIONS,
   handler: async (args) => findMealCombinations(args),
 })
 
@@ -1611,6 +1657,7 @@ toolRegistry.register({
   name: "picnic_get_cart",
   description: "Get the current shopping cart contents with filtered data",
   inputSchema: z.object({}),
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async () => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1694,6 +1741,7 @@ toolRegistry.register({
   name: "picnic_get_delivery_slots",
   description: "Get available delivery time slots",
   inputSchema: z.object({}),
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async () => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1711,6 +1759,13 @@ toolRegistry.register({
   name: "picnic_set_delivery_slot",
   description: "Select a delivery time slot",
   inputSchema: setDeliverySlotInputSchema,
+  // Selecting the same slot again changes nothing.
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1743,6 +1798,7 @@ toolRegistry.register({
   name: "picnic_get_deliveries",
   description: "Get past and current deliveries with pagination",
   inputSchema: deliveriesInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1775,6 +1831,7 @@ toolRegistry.register({
   name: "picnic_get_delivery",
   description: "Get details of a specific delivery",
   inputSchema: deliveryInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1788,6 +1845,7 @@ toolRegistry.register({
   name: "picnic_get_delivery_position",
   description: "Get real-time position data for a delivery",
   inputSchema: deliveryInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1801,6 +1859,7 @@ toolRegistry.register({
   name: "picnic_get_delivery_scenario",
   description: "Get driver and route information for a delivery",
   inputSchema: deliveryInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1810,21 +1869,35 @@ toolRegistry.register({
 })
 
 // Cancel delivery tool
-toolRegistry.register({
-  name: "picnic_cancel_delivery",
-  description: "Cancel a delivery order",
-  inputSchema: deliveryInputSchema,
-  handler: async (args) => {
-    await ensureClientInitialized()
-    const client = getPicnicClient()
-    const result = await client.delivery.cancelDelivery(args.deliveryId)
-    return {
-      message: "Delivery cancelled",
-      deliveryId: args.deliveryId,
-      result,
-    }
-  },
-})
+//
+// A cancelled delivery cannot be restored, so the tool is only offered when the user opts in
+// with PICNIC_ENABLE_CANCEL_DELIVERY=true. (Placing orders is not offered at all.)
+if (config.PICNIC_ENABLE_CANCEL_DELIVERY) {
+  toolRegistry.register({
+    name: "picnic_cancel_delivery",
+    description:
+      "Cancel a delivery order. This cannot be undone: only call it when the user explicitly " +
+      "asks to cancel that delivery.",
+    inputSchema: deliveryInputSchema,
+    // Never retry blindly: the cancellation may already have gone through.
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    handler: async (args) => {
+      await ensureClientInitialized()
+      const client = getPicnicClient()
+      const result = await client.delivery.cancelDelivery(args.deliveryId)
+      return {
+        message: "Delivery cancelled",
+        deliveryId: args.deliveryId,
+        result,
+      }
+    },
+  })
+}
 
 // Rate delivery tool
 const rateDeliveryInputSchema = z.object({
@@ -1836,6 +1909,13 @@ toolRegistry.register({
   name: "picnic_rate_delivery",
   description: "Rate a completed delivery",
   inputSchema: rateDeliveryInputSchema,
+  // Rating again with the same score changes nothing.
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1857,6 +1937,13 @@ toolRegistry.register({
   name: "picnic_send_delivery_invoice_email",
   description: "Send or resend the invoice email for a completed delivery",
   inputSchema: sendInvoiceEmailInputSchema,
+  // Every call sends another email.
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
+  },
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1878,6 +1965,7 @@ toolRegistry.register({
   name: "picnic_get_order_status",
   description: "Get the status of a specific order",
   inputSchema: orderStatusInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1891,6 +1979,7 @@ toolRegistry.register({
   name: "picnic_get_user_details",
   description: "Get details of the current logged-in user",
   inputSchema: z.object({}),
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async () => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1904,6 +1993,7 @@ toolRegistry.register({
   name: "picnic_get_user_info",
   description: "Get user information including toggled features",
   inputSchema: z.object({}),
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async () => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1917,6 +2007,7 @@ toolRegistry.register({
   name: "picnic_get_payment_profile",
   description: "Get payment information and profile",
   inputSchema: z.object({}),
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async () => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1934,6 +2025,7 @@ toolRegistry.register({
   name: "picnic_get_wallet_transactions",
   description: "Get wallet transaction history",
   inputSchema: walletTransactionsInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1955,6 +2047,7 @@ toolRegistry.register({
   name: "picnic_get_wallet_transaction_details",
   description: "Get detailed information about a specific wallet transaction",
   inputSchema: walletTransactionDetailsInputSchema,
+  annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -1972,6 +2065,13 @@ toolRegistry.register({
   name: "picnic_generate_2fa_code",
   description: "Generate a 2FA code for verification",
   inputSchema: generate2FAInputSchema,
+  // Every call sends a new code.
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
+  },
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
@@ -2005,6 +2105,13 @@ toolRegistry.register({
   name: "picnic_verify_2fa_code",
   description: "Verify a 2FA code",
   inputSchema: verify2FAInputSchema,
+  // Stores the new auth key; a code can be used only once.
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
+  },
   handler: async (args) => {
     await ensureClientInitialized()
     await verifyPicnic2FACode(args.code)

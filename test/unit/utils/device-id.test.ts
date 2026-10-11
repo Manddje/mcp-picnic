@@ -58,9 +58,10 @@ describe("resolveDeviceId", () => {
     // 8 random bytes -> 16 uppercase hex characters.
     expect(id).toMatch(/^[0-9A-F]{16}$/)
     expect(fs.writeFile).toHaveBeenCalledTimes(1)
-    const [file, payload] = vi.mocked(fs.writeFile).mock.calls[0]
+    const [file, payload, options] = vi.mocked(fs.writeFile).mock.calls[0]
     expect(file).toBe("picnic-device.json")
     expect(JSON.parse(payload as string)).toEqual({ deviceId: id })
+    expect(options).toEqual({ mode: 0o600 })
   })
 
   it("falls through to generation when the persisted file has no deviceId", async () => {
@@ -73,6 +74,7 @@ describe("resolveDeviceId", () => {
     expect(fs.writeFile).toHaveBeenCalledWith(
       "picnic-device.json",
       expect.stringContaining("deviceId"),
+      { mode: 0o600 },
     )
   })
 

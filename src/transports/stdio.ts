@@ -34,7 +34,7 @@ export class StdioServer extends BaseTransportServer {
   public async start(): Promise<void> {
     this.transport = new StdioServerTransport()
     await this.mcpServer.connect(this.transport)
-    console.error("MCP Server Template running on stdio")
+    console.error("Picnic MCP server running on stdio")
   }
 
   /**

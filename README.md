@@ -10,7 +10,7 @@ An intelligent Model Context Protocol (MCP) server that enables AI assistants to
 
 MCP Picnic is a bridge between AI assistants (like Claude, ChatGPT, or other MCP-compatible tools) and Picnic's grocery delivery service. It provides:
 
-- **🛒 Smart Shopping**: Search products, manage your cart, and place orders through natural conversation
+- **🛒 Smart Shopping**: Search products and fill your cart through natural conversation; you check out in the Picnic app
 - **🍽️ Meal Planning**: Get AI-powered meal plans with automatic shopping list generation
 - **💰 Budget Management**: Shop within your budget with cost-conscious recommendations
 - **🚚 Delivery Tracking**: Monitor your orders and optimize delivery schedules
@@ -94,7 +94,7 @@ Add this configuration:
 5. **Start using it** - you should see a 🔨 hammer icon in the input area:
 
 ```
-"I want to plan meals for this week and order groceries from Picnic"
+"I want to plan meals for this week and put the groceries in my Picnic cart"
 ```
 
 ### Example Conversations
@@ -210,8 +210,8 @@ AI Actions:
 1. Uses picnic_search to find weekly grocery staples
 2. Uses picnic_search to find party-specific items
 3. Uses picnic_get_product_details to check pack sizes and ingredients
-4. Uses picnic_add_to_cart when ready to order
-5. Uses picnic_get_cart to review totals before checkout
+4. Uses picnic_add_to_cart to put the chosen items in the cart
+5. Uses picnic_get_cart to review the totals; you check out in the Picnic app
 ```
 
 ### 🎉 **Event Planning**
@@ -244,19 +244,19 @@ AI Actions:
 5. Tracks nutritional goals across multiple meals
 ```
 
-### 📱 **Smart Reordering**
+### 📱 **Smart Restocking**
 
-**Scenario**: Automatically reordering household essentials
+**Scenario**: Putting the usual household essentials back in the cart
 
 ```
-User: "Reorder my usual weekly essentials and add some new seasonal items"
+User: "Put my usual weekly essentials in the cart and add some new seasonal items"
 
 AI Actions:
 1. Uses picnic_get_user_details to check purchase history
 2. Uses picnic_get_wallet_transactions to identify regular purchases
 3. Uses picnic_search to find seasonal products
 4. Uses picnic_add_to_cart for both regular and new items
-5. Uses picnic_get_delivery_slots for convenient scheduling
+5. Uses picnic_get_delivery_slots to suggest a convenient slot; you check out in the Picnic app
 ```
 
 ### 🎯 **Price Comparison & Optimization**
@@ -286,15 +286,15 @@ AI Actions:
 2. Uses picnic_get_delivery_scenario for driver communication
 3. Uses picnic_rate_delivery after completion
 4. Uses picnic_send_delivery_invoice_email for records
-5. Uses picnic_get_order_status to confirm final order state
+5. Uses picnic_get_order_status to look up the status of the order in that delivery
 ```
 
 ### 💳 **Financial Tracking**
 
-**Scenario**: Managing grocery budget and payment methods
+**Scenario**: Tracking grocery spending and reviewing payment methods
 
 ```
-User: "Show me my grocery spending patterns and optimize my payment setup"
+User: "Show me my grocery spending patterns and which payment methods are on my account"
 
 AI Actions:
 1. Uses picnic_get_wallet_transactions for spending analysis
@@ -388,6 +388,11 @@ PICNIC_PASSWORD=your-picnic-password
 # Set this to match your Picnic account's country
 # Supported values: NL (Netherlands), DE (Germany), FR (France)
 PICNIC_COUNTRY_CODE=NL
+
+# Let the AI cancel deliveries (optional, defaults to false)
+# A cancelled delivery cannot be restored, so picnic_cancel_delivery is only
+# offered when this is set to true
+PICNIC_ENABLE_CANCEL_DELIVERY=false
 
 # HTTP Transport settings (optional)
 ENABLE_HTTP_SERVER=true
@@ -605,7 +610,7 @@ The server provides comprehensive access to Picnic's functionality through 30+ s
 - **`picnic_get_delivery`** - Get detailed information about a specific delivery
 - **`picnic_get_delivery_position`** - Track real-time driver location and ETA
 - **`picnic_get_delivery_scenario`** - Get driver and route information
-- **`picnic_cancel_delivery`** - Cancel a scheduled delivery
+- **`picnic_cancel_delivery`** - Cancel a scheduled delivery (only offered with `PICNIC_ENABLE_CANCEL_DELIVERY=true`)
 - **`picnic_rate_delivery`** - Rate completed deliveries (0-10 scale)
 - **`picnic_send_delivery_invoice_email`** - Send/resend delivery invoice emails
 - **`picnic_get_order_status`** - Check status of specific orders
@@ -679,7 +684,7 @@ Een intelligente Model Context Protocol (MCP) server die AI-assistenten in staat
 
 MCP Picnic is een brug tussen AI-assistenten (zoals Claude, ChatGPT, of andere MCP-compatibele tools) en Picnic's bezorgservice voor boodschappen. Het biedt:
 
-- **🛒 Slim Winkelen**: Zoek producten, beheer je winkelwagen, en plaats bestellingen via natuurlijke conversatie
+- **🛒 Slim Winkelen**: Zoek producten en vul je winkelwagen via natuurlijke conversatie; afrekenen doe je in de Picnic-app
 - **🍽️ Maaltijdplanning**: Krijg AI-gestuurde maaltijdplannen met automatische boodschappenlijst generatie
 - **💰 Budget Beheer**: Shop binnen je budget met kostenefficiënte aanbevelingen
 - **🚚 Bezorging Volgen**: Monitor je bestellingen en optimaliseer bezorgschema's
@@ -690,6 +695,7 @@ MCP Picnic is een brug tussen AI-assistenten (zoals Claude, ChatGPT, of andere M
 
 - 🇳🇱 Nederland
 - 🇩🇪 Duitsland
+- 🇫🇷 Frankrijk
 
 ## Belangrijkste Functies
 
@@ -715,7 +721,7 @@ MCP Picnic is een brug tussen AI-assistenten (zoals Claude, ChatGPT, of andere M
 
 ### Vereisten
 
-- Een Picnic account (beschikbaar in Nederland of Duitsland)
+- Een Picnic account (beschikbaar in Nederland, Duitsland of Frankrijk)
 - Een MCP-compatibele AI-assistent (Claude Desktop, Continue, etc.)
 - Node.js 18+ geïnstalleerd op je systeem
 
@@ -752,14 +758,14 @@ Voeg deze configuratie toe:
 
 **Belangrijk**:
 - Vervang `jouw-picnic-email@example.com` en `jouw-picnic-wachtwoord` met je echte Picnic account gegevens.
-- Stel `PICNIC_COUNTRY_CODE` in op `"DE"` als je Picnic account in Duitsland geregistreerd is. Voor Nederlandse accounts kun je dit veld weglaten of instellen op `"NL"`.
+- Stel `PICNIC_COUNTRY_CODE` in op `"DE"` als je Picnic account in Duitsland geregistreerd is, of op `"FR"` voor Frankrijk. Voor Nederlandse accounts kun je dit veld weglaten of instellen op `"NL"`.
 
 3. **Herstart Claude Desktop** volledig
 
 4. **Begin met gebruiken** - je zou een 🔨 hamer icoon moeten zien in het invoerveld:
 
 ```
-"Ik wil maaltijden plannen voor deze week en boodschappen bestellen bij Picnic"
+"Ik wil maaltijden plannen voor deze week en de boodschappen in mijn Picnic-winkelwagen zetten"
 ```
 
 ## Setup Instructies
@@ -907,8 +913,8 @@ AI Acties:
 1. Gebruikt picnic_search om wekelijkse basisboodschappen te vinden
 2. Gebruikt picnic_search om feest-specifieke items te vinden
 3. Gebruikt picnic_get_product_details om verpakkingsmaten en ingrediënten te controleren
-4. Gebruikt picnic_add_to_cart wanneer klaar om te bestellen
-5. Gebruikt picnic_get_cart om totalen voor het afrekenen te controleren
+4. Gebruikt picnic_add_to_cart om de gekozen items in de winkelwagen te zetten
+5. Gebruikt picnic_get_cart om de totalen te controleren; afrekenen doe je in de Picnic-app
 ```
 
 ### 🎉 **Evenement Planning**
@@ -941,19 +947,19 @@ AI Acties:
 5. Volgt voedingsdoelen over meerdere maaltijden
 ```
 
-### 📱 **Slimme Herbestelling**
+### 📱 **Slim Aanvullen**
 
-**Scenario**: Automatisch herbestellen van huishoudelijke essentials
+**Scenario**: De gebruikelijke huishoudelijke essentials weer in de winkelwagen zetten
 
 ```
-Gebruiker: "Bestel mijn gebruikelijke wekelijkse essentials opnieuw en voeg wat nieuwe seizoensproducten toe"
+Gebruiker: "Zet mijn gebruikelijke wekelijkse essentials in de winkelwagen en voeg wat nieuwe seizoensproducten toe"
 
 AI Acties:
 1. Gebruikt picnic_get_user_details om aankoopgeschiedenis te controleren
 2. Gebruikt picnic_get_wallet_transactions om reguliere aankopen te identificeren
 3. Gebruikt picnic_search om seizoensproducten te vinden
 4. Gebruikt picnic_add_to_cart voor zowel reguliere als nieuwe items
-5. Gebruikt picnic_get_delivery_slots voor handige planning
+5. Gebruikt picnic_get_delivery_slots om een handig bezorgmoment voor te stellen; afrekenen doe je in de Picnic-app
 ```
 
 ### 🎯 **Prijsvergelijking & Optimalisatie**
@@ -983,15 +989,15 @@ AI Acties:
 2. Gebruikt picnic_get_delivery_scenario voor chauffeur communicatie
 3. Gebruikt picnic_rate_delivery na voltooiing
 4. Gebruikt picnic_send_delivery_invoice_email voor administratie
-5. Gebruikt picnic_get_order_status om de uiteindelijke bestelstatus te bevestigen
+5. Gebruikt picnic_get_order_status om de status van de bestelling in die bezorging op te zoeken
 ```
 
 ### 💳 **Financiële Tracking**
 
-**Scenario**: Boodschappenbudget beheren en betalingsmethoden optimaliseren
+**Scenario**: Boodschappenuitgaven volgen en betalingsmethoden bekijken
 
 ```
-Gebruiker: "Toon me mijn boodschappen uitgavenpatronen en optimaliseer mijn betalingsinstellingen"
+Gebruiker: "Toon me mijn boodschappen uitgavenpatronen en welke betalingsmethoden op mijn account staan"
 
 AI Acties:
 1. Gebruikt picnic_get_wallet_transactions voor uitgavenanalyse
@@ -1013,7 +1019,7 @@ Ein intelligenter Model Context Protocol (MCP) Server, der KI-Assistenten ermög
 
 MCP Picnic ist eine Brücke zwischen KI-Assistenten (wie Claude, ChatGPT oder anderen MCP-kompatiblen Tools) und Picnics Lebensmittel-Lieferservice. Es bietet:
 
-- **🛒 Intelligentes Einkaufen**: Suchen Sie Produkte, verwalten Sie Ihren Warenkorb und geben Sie Bestellungen über natürliche Unterhaltung auf
+- **🛒 Intelligentes Einkaufen**: Suchen Sie Produkte und füllen Sie Ihren Warenkorb über natürliche Unterhaltung; die Bestellung schließen Sie in der Picnic-App ab
 - **🍽️ Mahlzeitenplanung**: Erhalten Sie KI-gesteuerte Mahlzeitenpläne mit automatischer Einkaufslistenerstellung
 - **💰 Budget-Management**: Kaufen Sie innerhalb Ihres Budgets mit kostenbewussten Empfehlungen ein
 - **🚚 Lieferverfolgung**: Überwachen Sie Ihre Bestellungen und optimieren Sie Lieferpläne
@@ -1024,6 +1030,7 @@ MCP Picnic ist eine Brücke zwischen KI-Assistenten (wie Claude, ChatGPT oder an
 
 - 🇳🇱 Niederlande
 - 🇩🇪 Deutschland
+- 🇫🇷 Frankreich
 
 ## Hauptfunktionen
 
@@ -1049,7 +1056,7 @@ MCP Picnic ist eine Brücke zwischen KI-Assistenten (wie Claude, ChatGPT oder an
 
 ### Voraussetzungen
 
-- Ein Picnic-Konto (verfügbar in den Niederlanden oder Deutschland)
+- Ein Picnic-Konto (verfügbar in den Niederlanden, Deutschland oder Frankreich)
 - Ein MCP-kompatibler KI-Assistent (Claude Desktop, Continue, etc.)
 - Node.js 18+ auf Ihrem System installiert
 
@@ -1086,14 +1093,14 @@ Fügen Sie diese Konfiguration hinzu:
 
 **Wichtig**:
 - Ersetzen Sie `ihre-picnic-email@example.com` und `ihr-picnic-passwort` mit Ihren tatsächlichen Picnic-Kontodaten.
-- Für deutsche Accounts sollte `PICNIC_COUNTRY_CODE` auf `"DE"` gesetzt sein. Für niederländische Accounts setzen Sie es auf `"NL"`.
+- Für deutsche Accounts sollte `PICNIC_COUNTRY_CODE` auf `"DE"` gesetzt sein. Für niederländische Accounts setzen Sie es auf `"NL"`, für französische auf `"FR"`.
 
 3. **Starten Sie Claude Desktop** vollständig neu
 
 4. **Beginnen Sie mit der Nutzung** - Sie sollten ein 🔨 Hammer-Symbol im Eingabebereich sehen:
 
 ```
-"Ich möchte Mahlzeiten für diese Woche planen und Lebensmittel bei Picnic bestellen"
+"Ich möchte Mahlzeiten für diese Woche planen und die Lebensmittel in meinen Picnic-Warenkorb legen"
 ```
 
 ## Setup-Anweisungen
@@ -1241,8 +1248,8 @@ KI-Aktionen:
 1. Verwendet picnic_search um wöchentliche Grundnahrungsmittel zu finden
 2. Verwendet picnic_search um party-spezifische Artikel zu finden
 3. Verwendet picnic_get_product_details um Packungsgrößen und Zutaten zu prüfen
-4. Verwendet picnic_add_to_cart wenn bereit zum Bestellen
-5. Verwendet picnic_get_cart um Gesamtsummen vor dem Checkout zu prüfen
+4. Verwendet picnic_add_to_cart um die ausgewählten Artikel in den Warenkorb zu legen
+5. Verwendet picnic_get_cart um die Gesamtsummen zu prüfen; die Bestellung schließen Sie in der Picnic-App ab
 ```
 
 ### 🎉 **Veranstaltungsplanung**
@@ -1275,19 +1282,19 @@ KI-Aktionen:
 5. Verfolgt Ernährungsziele über mehrere Mahlzeiten
 ```
 
-### 📱 **Intelligente Nachbestellung**
+### 📱 **Intelligentes Auffüllen**
 
-**Szenario**: Automatische Nachbestellung von Haushaltsessentials
+**Szenario**: Die üblichen Haushaltsessentials wieder in den Warenkorb legen
 
 ```
-Benutzer: "Bestelle meine üblichen wöchentlichen Essentials nach und füge neue saisonale Artikel hinzu"
+Benutzer: "Leg meine üblichen wöchentlichen Essentials in den Warenkorb und füge neue saisonale Artikel hinzu"
 
 KI-Aktionen:
 1. Verwendet picnic_get_user_details um Kaufhistorie zu prüfen
 2. Verwendet picnic_get_wallet_transactions um regelmäßige Käufe zu identifizieren
 3. Verwendet picnic_search um saisonale Produkte zu finden
 4. Verwendet picnic_add_to_cart für sowohl reguläre als auch neue Artikel
-5. Verwendet picnic_get_delivery_slots für bequeme Planung
+5. Verwendet picnic_get_delivery_slots um ein passendes Lieferfenster vorzuschlagen; die Bestellung schließen Sie in der Picnic-App ab
 ```
 
 ### 🎯 **Preisvergleich & Optimierung**
@@ -1317,15 +1324,15 @@ KI-Aktionen:
 2. Verwendet picnic_get_delivery_scenario für Fahrerkommunikation
 3. Verwendet picnic_rate_delivery nach Abschluss
 4. Verwendet picnic_send_delivery_invoice_email für Aufzeichnungen
-5. Verwendet picnic_get_order_status um den endgültigen Bestellstatus zu bestätigen
+5. Verwendet picnic_get_order_status um den Status der Bestellung in dieser Lieferung abzufragen
 ```
 
 ### 💳 **Finanzielle Verfolgung**
 
-**Szenario**: Lebensmittelbudget verwalten und Zahlungsmethoden optimieren
+**Szenario**: Lebensmittelausgaben verfolgen und Zahlungsmethoden ansehen
 
 ```
-Benutzer: "Zeige mir meine Lebensmittelausgabenmuster und optimiere meine Zahlungseinstellungen"
+Benutzer: "Zeige mir meine Lebensmittelausgabenmuster und welche Zahlungsmethoden in meinem Konto hinterlegt sind"
 
 KI-Aktionen:
 1. Verwendet picnic_get_wallet_transactions für Ausgabenanalyse
