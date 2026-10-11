@@ -1,4 +1,5 @@
 import http from "http"
+import { Socket } from "net"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   StreamableHttpServer,
@@ -102,9 +103,9 @@ describe("StreamableHttpServer", () => {
     server = new StreamableHttpServer()
     const listenSpy = vi.spyOn(http.Server.prototype, "listen").mockImplementation(function (
       this: any,
-      _port: any,
-      callback: any,
+      ...args: any[]
     ) {
+      const callback = args[args.length - 1]
       if (typeof callback === "function") {
         callback()
       }
@@ -123,7 +124,7 @@ describe("StreamableHttpServer", () => {
     await server.start()
     // @ts-expect-error - private property access
     expect(server.server).toBeInstanceOf(http.Server)
-    expect(listenSpy).toHaveBeenCalledWith(3000, expect.any(Function))
+    expect(listenSpy).toHaveBeenCalledWith(3000, "localhost", expect.any(Function))
 
     await server.stop()
     expect(closeSpy).toHaveBeenCalled()
@@ -133,10 +134,10 @@ describe("StreamableHttpServer", () => {
     server = new StreamableHttpServer()
     vi.spyOn(http.Server.prototype, "listen").mockImplementation(function (
       this: any,
-      _port: any,
-      callback: any,
+      ...args: any[]
     ) {
-      if (callback) callback()
+      const callback = args[args.length - 1]
+      if (typeof callback === "function") callback()
       return this
     })
     vi.spyOn(http.Server.prototype, "close").mockImplementation(function (
@@ -156,7 +157,7 @@ describe("StreamableHttpServer", () => {
 
   it("should provide a health check", async () => {
     vi.useRealTimers()
-    server = new StreamableHttpServer({ port: 0, enableRequestLogging: false })
+    server = new StreamableHttpServer({ port: 0, host: "127.0.0.1", enableRequestLogging: false })
     await server.start()
 
     // @ts-expect-error - private property access
@@ -191,7 +192,7 @@ describe("StreamableHttpServer", () => {
 
   it("should setup routes", async () => {
     vi.useRealTimers()
-    server = new StreamableHttpServer({ port: 0, enableRequestLogging: false })
+    server = new StreamableHttpServer({ port: 0, host: "127.0.0.1", enableRequestLogging: false })
     await server.start()
 
     // @ts-expect-error - private property access
@@ -226,7 +227,12 @@ describe("StreamableHttpServer", () => {
 
   it("should require authentication when authToken is configured", async () => {
     vi.useRealTimers()
-    server = new StreamableHttpServer({ port: 0, enableRequestLogging: false, authToken: "secret" })
+    server = new StreamableHttpServer({
+      port: 0,
+      host: "127.0.0.1",
+      enableRequestLogging: false,
+      authToken: "secret",
+    })
     await server.start()
 
     // @ts-expect-error - private property access
@@ -258,7 +264,12 @@ describe("StreamableHttpServer", () => {
 
   it("should require auth for /mcp POST when authToken is configured", async () => {
     vi.useRealTimers()
-    server = new StreamableHttpServer({ port: 0, enableRequestLogging: false, authToken: "secret" })
+    server = new StreamableHttpServer({
+      port: 0,
+      host: "127.0.0.1",
+      enableRequestLogging: false,
+      authToken: "secret",
+    })
     await server.start()
 
     // @ts-expect-error - private property access
@@ -308,6 +319,7 @@ describe("StreamableHttpServer", () => {
     vi.useRealTimers()
     server = new StreamableHttpServer({
       port: 0,
+      host: "127.0.0.1",
       enableRequestLogging: false,
       authToken: "secret",
       authHeaderName: "x-api-token",
@@ -345,6 +357,7 @@ describe("StreamableHttpServer", () => {
     vi.useRealTimers()
     server = new StreamableHttpServer({
       port: 0,
+      host: "127.0.0.1",
       enableRequestLogging: false,
       authToken: "secret",
       authHeaderName: "x-api-token",
@@ -380,7 +393,12 @@ describe("StreamableHttpServer", () => {
 
   it("should allow authorization bearer token authentication", async () => {
     vi.useRealTimers()
-    server = new StreamableHttpServer({ port: 0, enableRequestLogging: false, authToken: "secret" })
+    server = new StreamableHttpServer({
+      port: 0,
+      host: "127.0.0.1",
+      enableRequestLogging: false,
+      authToken: "secret",
+    })
     await server.start()
 
     // @ts-expect-error - private property access
@@ -440,5 +458,224 @@ describe("StreamableHttpServer", () => {
     expect(() => server.cleanupSession(sessionId)).not.toThrow()
     expect(transport.closeCalls).toBe(1)
     expect(server.getActiveSessions()).toEqual([])
+  })
+})
+
+interface InjectedResponse {
+  status: number
+  headers: http.OutgoingHttpHeaders
+  body: string
+}
+
+/**
+ * Runs a request through the server's Express app in-process, the way Node's HTTP server would
+ * hand it over, so these tests don't need to bind a port.
+ */
+function inject(
+  target: StreamableHttpServer,
+  request: { method?: string; path?: string; headers?: Record<string, string> } = {},
+): Promise<InjectedResponse> {
+  const { method = "GET", path = "/health", headers = {} } = request
+  return new Promise((resolve) => {
+    const req = new http.IncomingMessage(new Socket())
+    req.method = method
+    req.url = path
+    req.headers = Object.fromEntries(
+      Object.entries({ host: "localhost:3000", ...headers }).map(([name, value]) => [
+        name.toLowerCase(),
+        value,
+      ]),
+    )
+    req.push(null)
+
+    const res = new http.ServerResponse(req)
+    const chunks: Buffer[] = []
+    res.write = ((chunk: string | Buffer) => {
+      chunks.push(Buffer.from(chunk))
+      return true
+    }) as typeof res.write
+    res.end = ((chunk?: unknown) => {
+      if (typeof chunk === "string" || Buffer.isBuffer(chunk)) {
+        chunks.push(Buffer.from(chunk))
+      }
+      resolve({
+        status: res.statusCode,
+        headers: res.getHeaders(),
+        body: Buffer.concat(chunks).toString(),
+      })
+      res.emit("finish")
+      return res
+    }) as typeof res.end
+
+    // @ts-expect-error - private property access
+    target.app(req, res)
+  })
+}
+
+describe("StreamableHttpServer request validation", () => {
+  let server: StreamableHttpServer | undefined
+
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await server?.stop().catch(() => {})
+    server = undefined
+  })
+
+  describe("when bound to a loopback host", () => {
+    it.each(["localhost:3000", "127.0.0.1:3000", "[::1]:3000"])("accepts Host %s", async (host) => {
+      server = new StreamableHttpServer({ enableRequestLogging: false })
+
+      const res = await inject(server, { headers: { host } })
+
+      expect(res.status).toBe(200)
+    })
+
+    it("rejects any other Host, which is what a DNS rebinding attack sends", async () => {
+      server = new StreamableHttpServer({ enableRequestLogging: false })
+
+      const res = await inject(server, { headers: { host: "attacker.example:3000" } })
+
+      expect(res.status).toBe(403)
+      expect(JSON.parse(res.body).error.message).toBe("Invalid Host: attacker.example")
+    })
+  })
+
+  it("leaves Host alone when a non-loopback bind is protected by the auth token", async () => {
+    server = new StreamableHttpServer({
+      host: "0.0.0.0",
+      authToken: "secret",
+      enableRequestLogging: false,
+    })
+
+    const res = await inject(server, { headers: { host: "192.168.1.20:3000" } })
+
+    expect(res.status).toBe(200)
+  })
+
+  describe("browser origins", () => {
+    it("rejects requests from other websites", async () => {
+      server = new StreamableHttpServer({ enableRequestLogging: false })
+
+      const res = await inject(server, { headers: { origin: "https://attacker.example" } })
+
+      expect(res.status).toBe(403)
+      expect(JSON.parse(res.body).error.message).toBe("Invalid Origin: https://attacker.example")
+      expect(res.headers["access-control-allow-origin"]).toBeUndefined()
+    })
+
+    it("lets loopback pages in and exposes the session header to them", async () => {
+      server = new StreamableHttpServer({ enableRequestLogging: false })
+
+      const res = await inject(server, { headers: { origin: "http://localhost:6274" } })
+
+      expect(res.status).toBe(200)
+      expect(res.headers["access-control-allow-origin"]).toBe("http://localhost:6274")
+      expect(res.headers["access-control-expose-headers"]).toBe("Mcp-Session-Id")
+    })
+
+    it("sends no CORS headers to clients that are not browsers", async () => {
+      server = new StreamableHttpServer({ enableRequestLogging: false })
+
+      const res = await inject(server)
+
+      expect(res.status).toBe(200)
+      expect(res.headers["access-control-allow-origin"]).toBeUndefined()
+    })
+
+    it("answers preflights before asking for the auth token", async () => {
+      server = new StreamableHttpServer({ enableRequestLogging: false, authToken: "secret" })
+
+      const res = await inject(server, {
+        method: "OPTIONS",
+        path: "/mcp",
+        headers: {
+          origin: "http://127.0.0.1:6274",
+          "access-control-request-method": "POST",
+          "access-control-request-headers":
+            "content-type,authorization,mcp-session-id,mcp-protocol-version",
+        },
+      })
+
+      expect(res.status).toBe(204)
+      expect(res.headers["access-control-allow-origin"]).toBe("http://127.0.0.1:6274")
+      expect(String(res.headers["access-control-allow-headers"]).split(",")).toEqual(
+        expect.arrayContaining([
+          "Content-Type",
+          "Authorization",
+          "Mcp-Session-Id",
+          "Mcp-Protocol-Version",
+          "x-mcp-token",
+        ]),
+      )
+    })
+
+    it("lets in configured origins, whatever URL form they are given in", async () => {
+      server = new StreamableHttpServer({
+        enableRequestLogging: false,
+        allowedOrigins: ["https://app.example.com/"],
+      })
+
+      const allowed = await inject(server, { headers: { origin: "https://app.example.com" } })
+      const other = await inject(server, { headers: { origin: "https://other.example.com" } })
+
+      expect(allowed.status).toBe(200)
+      expect(allowed.headers["access-control-allow-origin"]).toBe("https://app.example.com")
+      expect(other.status).toBe(403)
+    })
+
+    it("lets in every origin when configured with *", async () => {
+      server = new StreamableHttpServer({ enableRequestLogging: false, allowedOrigins: ["*"] })
+
+      const res = await inject(server, { headers: { origin: "https://anywhere.example" } })
+
+      expect(res.status).toBe(200)
+    })
+
+    it("rejects a configured origin that is not a URL", () => {
+      expect(() => new StreamableHttpServer({ allowedOrigins: ["app.example.com"] })).toThrow(
+        'Invalid allowed origin "app.example.com"',
+      )
+    })
+  })
+
+  describe("start", () => {
+    it("refuses a non-loopback host without an auth token", async () => {
+      server = new StreamableHttpServer({ host: "0.0.0.0", enableRequestLogging: false })
+      const listenSpy = vi.spyOn(http.Server.prototype, "listen")
+
+      await expect(server.start()).rejects.toThrow(
+        "Refusing to start the HTTP server on 0.0.0.0 without HTTP_AUTH_TOKEN",
+      )
+      expect(listenSpy).not.toHaveBeenCalled()
+    })
+
+    it("binds to a non-loopback host when an auth token is set", async () => {
+      server = new StreamableHttpServer({
+        host: "0.0.0.0",
+        authToken: "secret",
+        enableRequestLogging: false,
+      })
+      const listenSpy = vi.spyOn(http.Server.prototype, "listen").mockImplementation(function (
+        this: any,
+        ...args: any[]
+      ) {
+        args[args.length - 1]()
+        return this
+      })
+
+      await server.start()
+
+      expect(listenSpy).toHaveBeenCalledWith(3000, "0.0.0.0", expect.any(Function))
+    })
+
+    it("fails when the port can't be bound", async () => {
+      server = new StreamableHttpServer({ enableRequestLogging: false })
+      vi.spyOn(http.Server.prototype, "listen").mockImplementation(function (this: any) {
+        this.emit("error", new Error("listen EADDRINUSE: address already in use 127.0.0.1:3000"))
+        return this
+      })
+
+      await expect(server.start()).rejects.toThrow("EADDRINUSE")
+    })
   })
 })

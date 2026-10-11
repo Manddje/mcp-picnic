@@ -1,4 +1,5 @@
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
+import { localhostHostValidation } from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js"
 import express, { Request, Response, NextFunction } from "express"
 import cors from "cors"
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js"
@@ -6,6 +7,38 @@ import { BaseTransportServer } from "./base.js"
 import { TransportError, ErrorCode, ErrorUtils } from "../types/errors.js"
 import { createRateLimitMiddleware, RateLimitConfig } from "../utils/rate-limiter.js"
 import { randomUUID, timingSafeEqual } from "crypto"
+
+// The hosts the SDK treats as loopback (see its createMcpExpressApp). Bound to one of these, the
+// server is only reachable from this machine, where DNS rebinding is what's left to defend.
+const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "::1"]
+
+// Pages served from this machine, on any port (the MCP Inspector, for one).
+const LOOPBACK_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/
+
+/**
+ * Whether the server would only be reachable from this machine when bound to `host`.
+ */
+export function isLoopbackHost(host: string): boolean {
+  return LOOPBACK_HOSTS.includes(host)
+}
+
+/**
+ * Brings a configured origin into the form browsers send in the Origin header: no path, no
+ * trailing slash, no default port. "*" passes through and allows every origin.
+ */
+function normalizeOrigin(origin: string): string {
+  if (origin === "*") {
+    return origin
+  }
+  try {
+    return new URL(origin).origin
+  } catch {
+    throw new TransportError(
+      ErrorCode.CONFIGURATION_ERROR,
+      `Invalid allowed origin "${origin}": expected a URL such as https://app.example.com`,
+    )
+  }
+}
 
 /**
  * Configuration options for the HTTP server
@@ -15,6 +48,9 @@ export interface StreamableHttpServerOptions {
   host?: string
   authToken?: string
   authHeaderName?: string
+  /** Browser origins allowed besides loopback pages; "*" allows any origin. */
+  allowedOrigins?: string[]
+  /** Overrides for the default CORS headers. Which origins may connect is up to allowedOrigins. */
   corsOptions?: cors.CorsOptions
   rateLimitConfig?: RateLimitConfig
   requestTimeoutMs?: number
@@ -34,6 +70,7 @@ export class StreamableHttpServer extends BaseTransportServer {
   private port: number
   private host: string
   private options: StreamableHttpServerOptions
+  private allowedOrigins: string[]
   private rateLimiter?: ReturnType<typeof createRateLimitMiddleware>
   private transports: Record<string, StreamableHTTPServerTransport> = {}
   private sessionTimeouts = new Map<string, NodeJS.Timeout>()
@@ -49,7 +86,6 @@ export class StreamableHttpServer extends BaseTransportServer {
       port: 3000,
       host: "localhost",
       authHeaderName: "x-mcp-token",
-      corsOptions: { origin: "*" },
       rateLimitConfig: { windowMs: 15 * 60 * 1000, maxRequests: 100 },
       requestTimeoutMs: 10000,
       maxRequestSizeBytes: 1024 * 1024 * 10, // 10MB
@@ -62,6 +98,7 @@ export class StreamableHttpServer extends BaseTransportServer {
 
     this.port = this.options.port!
     this.host = this.options.host!
+    this.allowedOrigins = (this.options.allowedOrigins ?? []).map(normalizeOrigin)
 
     // Set up middleware
     this.setupMiddleware()
@@ -90,6 +127,51 @@ export class StreamableHttpServer extends BaseTransportServer {
       })
     }
 
+    // DNS rebinding protection: a website can point its own hostname at 127.0.0.1 and reach a
+    // local server from the visitor's browser. Bound to loopback, only loopback names are valid
+    // Host values. A non-loopback bind can't be told apart this way, so start() demands the auth
+    // token there instead.
+    if (isLoopbackHost(this.host)) {
+      this.app.use(localhostHostValidation())
+    }
+
+    // The MCP spec requires validating Origin: any website can make the browser send requests
+    // here, and CORS only hides the response from the page while the request itself still runs.
+    // Requests without an Origin come from non-browser clients.
+    this.app.use((req: Request, res: Response, next: NextFunction) => {
+      const origin = req.header("origin")
+      if (origin === undefined || this.isAllowedOrigin(origin)) {
+        return next()
+      }
+      return res.status(403).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: `Invalid Origin: ${origin}` },
+        id: null,
+      })
+    })
+
+    // Before auth and rate limiting: browsers send preflights without the auth token, and the
+    // errors those middlewares return must carry CORS headers to be readable by the page.
+    this.app.use(
+      cors({
+        origin: (origin, callback) =>
+          callback(null, origin !== undefined && this.isAllowedOrigin(origin)),
+        methods: ["GET", "POST", "DELETE"],
+        allowedHeaders: [
+          "Content-Type",
+          "Accept",
+          "Authorization",
+          "Last-Event-ID",
+          "Mcp-Session-Id",
+          "Mcp-Protocol-Version",
+          this.options.authHeaderName ?? "x-mcp-token",
+        ],
+        // Browser clients must read the session id from the initialize response.
+        exposedHeaders: ["Mcp-Session-Id"],
+        ...this.options.corsOptions,
+      }),
+    )
+
     // Rate limiting middleware
     if (this.options.rateLimitConfig) {
       this.rateLimiter = createRateLimitMiddleware(this.options.rateLimitConfig)
@@ -117,8 +199,7 @@ export class StreamableHttpServer extends BaseTransportServer {
         if (!hasValidToken) {
           return res.status(401).json({
             error: "Unauthorized",
-            message:
-              "Missing or invalid authentication token. Provide a valid auth header.",
+            message: "Missing or invalid authentication token. Provide a valid auth header.",
           })
         }
 
@@ -145,18 +226,6 @@ export class StreamableHttpServer extends BaseTransportServer {
       res.on("close", () => clearTimeout(timeout))
       next()
     })
-
-    // Configure CORS
-    this.app.use(
-      cors(
-        this.options.corsOptions || {
-          origin: "*",
-          methods: ["GET", "POST", "DELETE"],
-          allowedHeaders: ["Content-Type", "MCP-Session-ID"],
-          exposedHeaders: ["MCP-Session-ID"],
-        },
-      ),
-    )
 
     // Configure JSON body parsing with size limit
     this.app.use(
@@ -225,6 +294,14 @@ export class StreamableHttpServer extends BaseTransportServer {
     }
 
     return timingSafeEqual(provided, expected)
+  }
+
+  private isAllowedOrigin(origin: string): boolean {
+    return (
+      LOOPBACK_ORIGIN.test(origin) ||
+      this.allowedOrigins.includes("*") ||
+      this.allowedOrigins.includes(origin)
+    )
   }
 
   /**
@@ -392,10 +469,25 @@ export class StreamableHttpServer extends BaseTransportServer {
    * @returns Promise that resolves when the server is started
    */
   public async start(): Promise<void> {
-    // Load resources based on available tokens
+    // Off loopback, the Host check doesn't apply and anyone who can reach the address could
+    // drive the Picnic account, so the token is what keeps them out.
+    if (!isLoopbackHost(this.host) && !this.options.authToken) {
+      throw new TransportError(
+        ErrorCode.CONFIGURATION_ERROR,
+        `Refusing to start the HTTP server on ${this.host} without HTTP_AUTH_TOKEN: anyone ` +
+          "who can reach that address could use your Picnic account. Set HTTP_AUTH_TOKEN, or " +
+          "set HTTP_HOST to localhost, 127.0.0.1 or ::1.",
+        { host: this.host },
+      )
+    }
 
-    return new Promise((resolve) => {
-      this.server = this.app.listen(this.port, () => {
+    return new Promise((resolve, reject) => {
+      // Express 5 passes listen errors (EADDRINUSE, EACCES) to this callback.
+      this.server = this.app.listen(this.port, this.host, (error?: Error) => {
+        if (error) {
+          reject(error)
+          return
+        }
         console.error(`MCP StreamableHTTP server running on http://${this.host}:${this.port}/mcp`)
         resolve()
       })
