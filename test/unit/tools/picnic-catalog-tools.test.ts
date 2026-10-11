@@ -3,12 +3,13 @@ import type { ToolResult } from "../../../src/tools/registry.js"
 
 const mocks = vi.hoisted(() => ({
   search: vi.fn(),
+  getProductDetails: vi.fn(),
   initializePicnicClient: vi.fn(),
 }))
 
 vi.mock("../../../src/utils/picnic-client.js", () => ({
   getPicnicClient: () => ({
-    catalog: { search: mocks.search },
+    catalog: { search: mocks.search, getProductDetails: mocks.getProductDetails },
     sendRequest: vi.fn(),
   }),
   initializePicnicClient: mocks.initializePicnicClient,
@@ -150,6 +151,188 @@ describe("picnic_search_many", () => {
     const tool = toolRegistry
       .getToolsList()
       .find((candidate) => candidate.name === "picnic_search_many")
+
+    expect(tool?.annotations).toMatchObject({ readOnlyHint: true })
+  })
+})
+
+function productDetails(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "s100",
+    name: "Kipfilet",
+    brand: "Picnic",
+    unitQuantity: "300 gram",
+    unitPrice: "€13,30/kg",
+    displayPrice: 399,
+    maxCount: 50,
+    imageIds: ["image-s100"],
+    description: null,
+    highlights: [],
+    allergens: [],
+    infoSections: [
+      { title: "Ingrediënten", content: "kipfilet (100%)" },
+      { title: "Voedingswaarde", content: "Energie 450 kJ" },
+    ],
+    promotion: null,
+    bundles: [],
+    priceRanges: null,
+    similarProducts: [],
+    ...overrides,
+  }
+}
+
+describe("picnic_check_products", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("returns name, brand, allergens and the ingredients text for each product", async () => {
+    mocks.getProductDetails.mockResolvedValue(
+      productDetails({
+        id: "s200",
+        name: "Pesto verde",
+        brand: "Barilla",
+        allergens: ["Melk", "Cashewnoten"],
+        infoSections: [
+          { title: "Extra informatie", content: "Na openen gekoeld bewaren" },
+          { title: "Ingrediënten", content: "basilicum (38%), zonnebloemolie, **kaas** (melk)" },
+        ],
+      }),
+    )
+
+    const toolRegistry = await loadTools()
+    const payload = parseToolResult(
+      await toolRegistry.executeTool("picnic_check_products", { product_ids: ["s200"] }),
+    )
+
+    expect(mocks.getProductDetails).toHaveBeenCalledWith("s200")
+    // Without flag_keywords there is nothing to flag, so no flags field.
+    expect(payload.products).toEqual([
+      {
+        id: "s200",
+        name: "Pesto verde",
+        brand: "Barilla",
+        allergens: ["Melk", "Cashewnoten"],
+        ingredients: "basilicum (38%), zonnebloemolie, kaas (melk)",
+      },
+    ])
+  })
+
+  it("flags keywords in name, ingredients and allergens, ignoring case and accents", async () => {
+    mocks.getProductDetails.mockImplementation(async (id: string) => {
+      if (id === "s1") {
+        return productDetails({
+          id,
+          name: "Saucijzenbroodje",
+          infoSections: [
+            { title: "Ingrediënten", content: "Bladerdeeg, VARKENSVLEES (40%), roomboter, ui" },
+          ],
+        })
+      }
+      if (id === "s2") {
+        return productDetails({ id, name: "Crème fraîche", allergens: ["Melk"] })
+      }
+      return productDetails({ id, name: "Broccoli", infoSections: [] })
+    })
+
+    const toolRegistry = await loadTools()
+    const payload = parseToolResult(
+      await toolRegistry.executeTool("picnic_check_products", {
+        product_ids: ["s1", "s2", "s3"],
+        flag_keywords: ["varken", "boter", "creme", "melk"],
+      }),
+    )
+
+    expect(payload.products.map((product: { flags: unknown }) => product.flags)).toEqual([
+      { varken: ["varkensvlees"], boter: ["roomboter"] },
+      { creme: ["creme"], melk: ["melk"] },
+      {},
+    ])
+  })
+
+  // Matching inside words is what catches compounds like varkensvlees, so it also hits words
+  // that merely contain the keyword. Reporting the word lets the caller see that.
+  it("reports the words a keyword was found in, so accidental hits are recognisable", async () => {
+    mocks.getProductDetails.mockResolvedValue(
+      productDetails({
+        name: "Roerbakgroente",
+        infoSections: [{ title: "Ingrediënten", content: "champignons, paprika, ui" }],
+      }),
+    )
+
+    const toolRegistry = await loadTools()
+    const payload = parseToolResult(
+      await toolRegistry.executeTool("picnic_check_products", {
+        product_ids: ["s100"],
+        flag_keywords: ["ham"],
+      }),
+    )
+
+    expect(payload.products[0].flags).toEqual({ ham: ["champignons"] })
+  })
+
+  // An empty flags object must not read as "clean" when there was nothing to search.
+  it("returns ingredients as null when the product has no ingredients section", async () => {
+    mocks.getProductDetails.mockResolvedValue(
+      productDetails({
+        brand: null,
+        infoSections: [{ title: "Voedingswaarde", content: "Energie 450 kJ" }],
+      }),
+    )
+
+    const toolRegistry = await loadTools()
+    const payload = parseToolResult(
+      await toolRegistry.executeTool("picnic_check_products", {
+        product_ids: ["s100"],
+        flag_keywords: ["varken"],
+      }),
+    )
+
+    expect(payload.products[0]).toEqual({
+      id: "s100",
+      name: "Kipfilet",
+      allergens: [],
+      ingredients: null,
+      flags: {},
+    })
+  })
+
+  it("reports a failing product in its own entry without failing the others", async () => {
+    mocks.getProductDetails.mockImplementation(async (id: string) => {
+      if (id === "s404") throw new Error("Product not found")
+      return productDetails({ id })
+    })
+
+    const toolRegistry = await loadTools()
+    const payload = parseToolResult(
+      await toolRegistry.executeTool("picnic_check_products", {
+        product_ids: ["s100", "s404", "s300"],
+      }),
+    )
+
+    expect(payload.products).toEqual([
+      expect.objectContaining({ id: "s100", name: "Kipfilet" }),
+      { id: "s404", error: "Product not found" },
+      expect.objectContaining({ id: "s300", name: "Kipfilet" }),
+    ])
+  })
+
+  it("rejects more than 20 products before calling Picnic", async () => {
+    const toolRegistry = await loadTools()
+
+    await expect(
+      toolRegistry.executeTool("picnic_check_products", {
+        product_ids: Array.from({ length: 21 }, (_, index) => `s${index}`),
+      }),
+    ).rejects.toThrow(/Invalid input/)
+    expect(mocks.getProductDetails).not.toHaveBeenCalled()
+  })
+
+  it("is marked read-only", async () => {
+    const toolRegistry = await loadTools()
+    const tool = toolRegistry
+      .getToolsList()
+      .find((candidate) => candidate.name === "picnic_check_products")
 
     expect(tool?.annotations).toMatchObject({ readOnlyHint: true })
   })

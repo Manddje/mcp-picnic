@@ -561,6 +561,120 @@ toolRegistry.register({
   },
 })
 
+// Batch product check tool
+//
+// Checking a week's products for dietary needs (no pork, no lactose) otherwise takes a full
+// details call per product. This returns only what such a check needs, for many at once.
+const CHECK_PRODUCTS_MAX = 20
+// Words reported per flagged keyword: enough to tell a real hit from an accidental one.
+const FLAG_WORDS_MAX = 3
+
+type ProductDetails = Awaited<ReturnType<CatalogService["getProductDetails"]>>
+
+// Ingredients section titles after normalizeText: "Ingrediënten" (NL), "Ingrédients" (FR) and
+// "Zutaten" (DE).
+const INGREDIENTS_TITLE_RE = /ingredi|zutaten/
+const WORD_CHAR_RE = /[\p{L}\p{N}]/u
+
+/** The text of a product's ingredients section without markdown emphasis, or null if none. */
+function getIngredientsText(details: ProductDetails): string | null {
+  const text = (details.infoSections ?? [])
+    .filter((section) => INGREDIENTS_TITLE_RE.test(normalizeText(section.title)))
+    .map((section) => section.content.replace(/\*\*|__/g, "").trim())
+    .filter(Boolean)
+    .join("\n")
+  return text || null
+}
+
+/**
+ * Returns the words of `text` that contain `keyword`, ignoring case and accents. Matching inside
+ * words catches Dutch compounds (varken in varkensvlees, boter in roomboter); returning the
+ * whole word lets the caller dismiss accidental hits (ham in champignons).
+ */
+function findKeywordWords(text: string, keyword: string): string[] {
+  const haystack = normalizeText(text)
+  const needle = normalizeText(keyword)
+  if (!needle) return []
+
+  const words = new Set<string>()
+  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
+    let start = at
+    let end = at + needle.length
+    while (start > 0 && WORD_CHAR_RE.test(haystack[start - 1])) start--
+    while (end < haystack.length && WORD_CHAR_RE.test(haystack[end])) end++
+    words.add(haystack.slice(start, end))
+  }
+  return [...words]
+}
+
+/** The fields a dietary check needs, plus the keyword hits when keywords are given. */
+function toProductCheck(details: ProductDetails, keywords: string[] | undefined) {
+  const allergens = details.allergens ?? []
+  const ingredients = getIngredientsText(details)
+  const check = {
+    id: details.id,
+    name: details.name,
+    ...(details.brand && { brand: details.brand }),
+    allergens,
+    // null rather than left out, so a missing ingredients list cannot pass for a clean one
+    ingredients,
+  }
+  if (!keywords?.length) return check
+
+  const texts = [details.name, ingredients ?? "", ...allergens]
+  const flags: Record<string, string[]> = {}
+  for (const keyword of keywords) {
+    const words = [...new Set(texts.flatMap((text) => findKeywordWords(text, keyword)))]
+    if (words.length > 0) flags[keyword] = words.slice(0, FLAG_WORDS_MAX)
+  }
+  return { ...check, flags }
+}
+
+toolRegistry.register({
+  name: "picnic_check_products",
+  description:
+    "Check up to 20 products in one call, e.g. for dietary needs: returns each product's name, " +
+    "brand, allergens and ingredients text. With flag_keywords it also lists, per product, " +
+    "which keywords occur in its name, allergens or ingredients and in which words, so " +
+    "accidental hits (ham in champignons) can be dismissed. No flags is no proof of absence: " +
+    "ingredients is null when Picnic lists none. A product that fails gets an entry with its " +
+    "error and does not fail the others.",
+  inputSchema: z.object({
+    product_ids: z
+      .array(z.string().min(1))
+      .min(1)
+      .max(CHECK_PRODUCTS_MAX)
+      .describe(
+        `Product (selling unit) IDs, up to ${CHECK_PRODUCTS_MAX}, as returned by picnic_search.`,
+      ),
+    flag_keywords: z
+      .array(z.string().trim().min(1))
+      .max(20)
+      .optional()
+      .describe(
+        'Words to look for, e.g. ["varken", "spek", "vis", "lactose", "melk"]. Matched ' +
+          "ignoring case and accents, also inside longer words (varken finds varkensvlees).",
+      ),
+  }),
+  annotations: READ_ONLY_ANNOTATIONS,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const run = concurrencyLimit(BATCH_CONCURRENCY)
+    const settled = await Promise.allSettled(
+      args.product_ids.map((id) => run(() => client.catalog.getProductDetails(id))),
+    )
+
+    return {
+      products: settled.map((result, index) =>
+        result.status === "fulfilled"
+          ? toProductCheck(result.value, args.flag_keywords)
+          : { id: args.product_ids[index], error: getErrorMessage(result.reason) },
+      ),
+    }
+  },
+})
+
 // Get product image tool
 const imageInputSchema = z.object({
   imageId: z.string().describe("The ID of the image to retrieve"),

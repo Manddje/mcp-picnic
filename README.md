@@ -556,6 +556,7 @@ The server provides comprehensive access to Picnic's functionality through 30+ s
 - **`picnic_get_promotions`** - Get current weekly promotions/deals with prices, labels and discount percentages; filter by text and sort by discount
 - **`picnic_get_suggestions`** - Get product suggestions based on query
 - **`picnic_get_product_details`** - Get detailed information about a specific product
+- **`picnic_check_products`** - Get allergens and ingredients of up to 20 products at once, optionally flagging keywords (e.g. pork or lactose)
 - **`picnic_get_image`** - Get product images in various sizes (tiny to extra-large)
 - **`picnic_get_page`** - Fetch a raw Picnic app page (Fusion or React Server Components) as JSON text
 

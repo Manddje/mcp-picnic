@@ -77,6 +77,17 @@ Look up product details by selling unit ID.
 - `productId` (string): The product selling unit ID returned by search or cart
 - `full` (boolean, optional): Return full product details, including description, allergens, nutritional info, promotions, and similar products
 
+#### `picnic_check_products`
+
+Check up to 20 products in one call, e.g. for dietary needs. Returns each product's name, brand, allergens and ingredients text (from the product page's ingredients section), fetched concurrently (at most five at a time).
+
+**Parameters:**
+
+- `product_ids` (array of strings): Product (selling unit) IDs, up to 20
+- `flag_keywords` (array of strings, optional): Words to look for, e.g. `["varken", "spek", "vis", "lactose"]`
+
+**Returns:** One entry per product, in input order. With `flag_keywords`, each entry also has `flags`: the keywords found in the product's name, allergens or ingredients, each with the words it was found in. Matching ignores case and accents and also finds keywords inside longer words, which catches compounds (`varken` finds `varkensvlees`) but also accidental hits (`ham` finds `champignons`); the reported words show which is which. An empty `flags` is no proof of absence: `ingredients` is `null` when Picnic lists none. A product that fails gets an entry with its `error`; the others are unaffected.
+
 #### `picnic_get_image`
 
 Get product image data.
