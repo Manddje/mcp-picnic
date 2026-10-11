@@ -521,6 +521,7 @@ The server uses the credentials configured in your environment variables:
 
 1. **Required**: Set `PICNIC_USERNAME` and `PICNIC_PASSWORD` in your MCP configuration
 2. **Session Persistence**: After successful authentication, your session is saved to `~/.picnic-session.json` and reused across restarts. You can customize this path with the `PICNIC_SESSION_FILE` environment variable.
+3. **Session Recovery**: If Picnic expires or revokes the session while the server is running, the server logs in again by itself and retries the request once, so no restart is needed. If that login asks for 2FA, tools return an error telling your assistant to call `picnic_generate_2fa_code` and `picnic_verify_2fa_code` first.
 
 ### Two-Factor Authentication (2FA)
 
@@ -797,6 +798,7 @@ De server gebruikt de inloggegevens die geconfigureerd zijn in je omgevingsvaria
 
 1. **Vereist**: Stel `PICNIC_USERNAME` en `PICNIC_PASSWORD` in je MCP configuratie in
 2. **Sessie opslag**: Na succesvolle authenticatie wordt je sessie opgeslagen in `~/.picnic-session.json` en hergebruikt bij herstarts. Je kunt dit pad aanpassen met de `PICNIC_SESSION_FILE` omgevingsvariabele.
+3. **Sessieherstel**: Verloopt of vervalt je sessie terwijl de server draait, dan logt de server zelf opnieuw in en probeert het verzoek één keer opnieuw, zonder herstart. Vraagt die login om 2FA, dan melden de tools dat je assistent eerst `picnic_generate_2fa_code` en `picnic_verify_2fa_code` moet aanroepen.
 
 ### Tweefactorauthenticatie (2FA)
 
@@ -1131,6 +1133,7 @@ Der Server verwendet die in Ihren Umgebungsvariablen konfigurierten Anmeldedaten
 
 1. **Erforderlich**: Setzen Sie `PICNIC_USERNAME` und `PICNIC_PASSWORD` in Ihrer MCP-Konfiguration
 2. **Sitzungsspeicherung**: Nach erfolgreicher Authentifizierung wird Ihre Sitzung in `~/.picnic-session.json` gespeichert und bei Neustarts wiederverwendet. Sie können diesen Pfad mit der Umgebungsvariablen `PICNIC_SESSION_FILE` anpassen.
+3. **Sitzungswiederherstellung**: Läuft Ihre Sitzung ab oder wird sie widerrufen, während der Server läuft, meldet sich der Server selbst neu an und wiederholt die Anfrage einmal, ganz ohne Neustart. Verlangt diese Anmeldung 2FA, melden die Tools, dass Ihr Assistent zuerst `picnic_generate_2fa_code` und `picnic_verify_2fa_code` aufrufen muss.
 
 ### Zwei-Faktor-Authentifizierung (2FA)
 

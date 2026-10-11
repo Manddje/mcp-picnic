@@ -18,6 +18,7 @@ vi.mock("picnic-api", () => {
     default: vi.fn().mockImplementation((opts: any) => ({
       auth: { login: mockLogin },
       cart: { getCart: mockGetCart },
+      sendRequest: vi.fn(),
       authKey: opts?.authKey ?? "fresh-auth-key",
       url: "https://example.test/api/15",
       baseHeaders: { "x-picnic-auth": opts?.authKey ?? "fresh-auth-key" },
