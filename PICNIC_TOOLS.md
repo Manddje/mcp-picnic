@@ -227,6 +227,7 @@ Fetch a Picnic recipe by URL or recipe ID.
 **Parameters:**
 
 - `recipe_url_or_id` (string): A Picnic recipe URL or 24-/32-character recipe ID
+- `portions` (number, optional): Render the recipe for this many portions (defaults to the recipe's own count)
 
 #### `picnic_get_saved_recipes`
 
@@ -286,6 +287,7 @@ Fetch structured recipe ingredients for meal planning.
 **Parameters:**
 
 - `recipe_url_or_id` (string): A Picnic recipe URL or 24-/32-character recipe ID
+- `portions` (number, optional): Return ingredients for this many portions (defaults to the recipe's own count)
 
 #### `picnic_get_multiple_recipe_ingredients`
 
@@ -302,6 +304,140 @@ Consolidate structured recipe ingredients into a shopping list.
 #### `picnic_find_meal_combinations`
 
 Rank recipe combinations by shared non-pantry ingredients and optional budget.
+
+### Own Recipes
+
+The user's own recipes ("Eigen recepten" in the app) consist of Picnic products with a pack quantity for the recipe's portions, plus a free-text note for preparation steps and anything Picnic does not sell. List them with `picnic_get_own_recipes`; their IDs are 32 characters long and work with every recipe tool, including `picnic_add_recipe_to_cart`.
+
+Picnic renders an own recipe only at multiples of its default portion count (for example 4, 8 or 12 for a 4-portion recipe), so a `portions` value outside those fails. Reads straight after an edit can briefly fail to render; the tools retry those automatically.
+
+#### `picnic_get_own_recipe`
+
+Get an own recipe with its portions, note (as plain text) and ingredients (`ingredientId`, `productId`, name, pack quantity). Also works for catalog recipes.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): A Picnic recipe URL or recipe ID
+- `portions` (number, optional): Return quantities for this many portions (defaults to the recipe's own count)
+- `resolve_names` (boolean, optional): Look up product names missing from the recipe page (default: true)
+
+#### `picnic_create_recipe`
+
+Create a new own recipe. Not idempotent: every call creates another recipe.
+
+**Parameters:**
+
+- `name` (string): Recipe name, max 43 characters (the app's limit)
+- `ingredients` (array): Products as `{ "product_id": "s1001524", "quantity": 1 }`; repeated products are merged
+- `portions` (number, optional): Number of portions the quantities are for (default: 4)
+- `note` (string, optional): Free-text note, max 5000 characters; each line becomes a paragraph
+
+#### `picnic_rename_recipe`
+
+Rename an own recipe.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): The own recipe's URL or ID
+- `name` (string): New name, max 43 characters
+
+#### `picnic_update_recipe_portions`
+
+Change the default number of portions of an own recipe.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): The own recipe's URL or ID
+- `portions` (number): New default number of portions
+
+#### `picnic_delete_recipe`
+
+Permanently delete an own recipe. Does not touch the cart; remove the recipe from the cart first with `picnic_remove_recipe_from_cart` if needed.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): The own recipe's URL or ID
+
+#### `picnic_add_recipe_ingredient`
+
+Add a product as a new ingredient to an own recipe. Not idempotent.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): The own recipe's URL or ID
+- `product_id` (string): Product (selling unit) ID from `picnic_search`
+- `quantity` (number, optional): Number of packs (default: 1)
+- `portions` (number, optional): Portion count the quantity is for (defaults to the recipe's own count)
+
+#### `picnic_update_recipe_ingredient`
+
+Change an ingredient's pack quantity, or swap it for another product. If the recipe is in the cart, the cart is updated to match.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): The own recipe's URL or ID
+- `ingredient_id` (string): The `ingredientId` from `picnic_get_own_recipe`
+- `quantity` (number): Number of packs
+- `product_id` (string, optional): Swap to this product (omit to keep the current one)
+- `portions` (number, optional): Portion count the quantity is for (defaults to the recipe's own count)
+
+#### `picnic_remove_recipe_ingredient`
+
+Remove an ingredient from an own recipe.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): The own recipe's URL or ID
+- `ingredient_id` (string): The `ingredientId` from `picnic_get_own_recipe`
+
+#### `picnic_set_recipe_note`
+
+Set or replace the note of an own recipe.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): The own recipe's URL or ID
+- `note` (string): Plain text, max 5000 characters; each line becomes a paragraph
+
+#### `picnic_delete_recipe_note`
+
+Delete the note of an own recipe.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): The own recipe's URL or ID
+
+#### `picnic_get_recipe_image_suggestions`
+
+List the images Picnic suggests for an own recipe.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): The own recipe's URL or ID
+
+#### `picnic_set_recipe_image`
+
+Set the image of an own recipe. Pass exactly one of `suggested_image_id`, `image_url` or `image_base64`.
+
+**Parameters:**
+
+- `recipe_url_or_id` (string): The own recipe's URL or ID
+- `suggested_image_id` (string, optional): An `imageId` from `picnic_get_recipe_image_suggestions`
+- `image_url` (string, optional): An http(s) URL of a photo to download and upload (max 10 MB)
+- `image_base64` (string, optional): A photo as base64 or a data URL (max 10 MB)
+- `mime_type` (string, optional): MIME type of `image_base64` (default: `image/jpeg`)
+
+### Raw App Pages
+
+#### `picnic_get_page`
+
+Fetch a raw Picnic app page as JSON text, for data no other tool covers. Handles both formats Picnic serves pages in (Fusion and React Server Components). Known pages include `category-tree-root` (product categories), `profile-root`, `promo-group-deep-dive?promo_group_id=<id>`, `L2-category-page-root?category_id=<id>` and `delivery-receipt-page?delivery_id=<id>`.
+
+**Parameters:**
+
+- `page_id` (string): Page ID, optionally with query params
+- `offset` (number, optional): Character offset to read the next chunk of a large page (default: 0)
+- `max_chars` (number, optional): Maximum number of characters to return (1000-100000, default: 20000)
 
 ### Other Removed Legacy Tools
 
@@ -349,6 +485,7 @@ The legacy `picnic_get_lists`, `picnic_get_list`, and `picnic_get_mgm_details` t
 - **Country Support**: Currently supports Netherlands (NL) and Germany (DE)
 - **Rate Limiting**: Be mindful of API rate limits when making frequent requests
 - **Security**: Credentials are read from environment variables and used to authenticate automatically when tools are called
+- **No ordering**: Placing orders is deliberately not supported. The tools can fill the cart and pick a delivery slot, but checking out and paying always happen in the Picnic app
 - **Unofficial API**: This uses an unofficial API wrapper, so functionality may change if Picnic updates their API
 
 ## Error Handling

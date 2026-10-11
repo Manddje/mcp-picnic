@@ -556,8 +556,9 @@ The server provides comprehensive access to Picnic's functionality through 30+ s
 - **`picnic_get_suggestions`** - Get product suggestions based on query
 - **`picnic_get_product_details`** - Get detailed information about a specific product
 - **`picnic_get_image`** - Get product images in various sizes (tiny to extra-large)
+- **`picnic_get_page`** - Fetch a raw Picnic app page (Fusion or React Server Components) as JSON text
 
-**Note**: `picnic_get_categories` is not available. The underlying `picnic-api` package removed `getCategories()` in v4; category browsing would need a new Fusion page implementation.
+**Note**: `picnic_get_categories` is not available. The underlying `picnic-api` package removed `getCategories()` in v4. The raw category tree is available through `picnic_get_page` with page ID `category-tree-root`.
 
 ### Recipe & Meal Planning
 
@@ -573,6 +574,21 @@ The server provides comprehensive access to Picnic's functionality through 30+ s
 - **`picnic_get_own_recipes`** - Get user-created recipes
 - **`picnic_save_recipe`** - Save a recipe
 - **`picnic_unsave_recipe`** - Remove a saved recipe
+
+### Own Recipes
+
+- **`picnic_get_own_recipe`** - Get an own recipe with its ingredients, portions and note
+- **`picnic_create_recipe`** - Create an own recipe from Picnic products, with an optional note
+- **`picnic_rename_recipe`** - Rename an own recipe
+- **`picnic_update_recipe_portions`** - Change the default number of portions
+- **`picnic_delete_recipe`** - Permanently delete an own recipe
+- **`picnic_add_recipe_ingredient`** - Add a product as an ingredient
+- **`picnic_update_recipe_ingredient`** - Change an ingredient's quantity or swap its product
+- **`picnic_remove_recipe_ingredient`** - Remove an ingredient
+- **`picnic_set_recipe_note`** - Set or replace the recipe's note (e.g. preparation steps)
+- **`picnic_delete_recipe_note`** - Delete the recipe's note
+- **`picnic_get_recipe_image_suggestions`** - List the images Picnic suggests for a recipe
+- **`picnic_set_recipe_image`** - Pick a suggested image or upload a photo (URL or base64)
 
 ### Shopping Cart Management
 
@@ -599,6 +615,8 @@ The server provides comprehensive access to Picnic's functionality through 30+ s
 - **`picnic_get_payment_profile`** - View payment methods and billing information
 - **`picnic_get_wallet_transactions`** - Get wallet transaction history (paginated)
 - **`picnic_get_wallet_transaction_details`** - Get detailed transaction information
+
+**Note**: Placing orders is deliberately not supported. The server can fill the cart and pick a delivery slot, but checking out and paying always happen in the Picnic app.
 
 ## Development
 
