@@ -131,7 +131,7 @@ describe("parseSellingGroupRecipe", () => {
     expect(r.totalTime).toBe("20 min")
     expect(r.servings).toBe("2 Portionen")
     expect(r.isSaved).toBe(true)
-    expect(r.imageUrl).toBe(`${IMAGE_BASE}/recipes/img1/large.png`)
+    expect(r.imageUrl).toBe(`${IMAGE_BASE}/recipes/img1/600x600.png`)
     expect(r.ingredients).toEqual(["Paprika 1 Stk.", "Basmatireis 100 g", "Gyros 250 g"])
     expect(r.pantryIngredients).toEqual(["0.5 Stk. Knoblauch", "Olivenöl", "Salz und Pfeffer"])
     expect(r.tools).toEqual(["Bratpfanne"])
@@ -268,7 +268,7 @@ describe("parseRecipeList", () => {
       {
         recipeId: RECIPE_ID,
         name: "Gyros-Reispfanne mit Feta",
-        imageUrl: `${IMAGE_BASE}/recipes/abc/large.png`,
+        imageUrl: `${IMAGE_BASE}/recipes/abc/600x600.png`,
         segments: ["SAVED_RECIPES"],
       },
     ])

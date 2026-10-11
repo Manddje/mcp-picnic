@@ -303,14 +303,18 @@ function collectTextTokens(page: unknown): string[] {
   return tokens
 }
 
-function buildImageUrl(
+// Recipe images are served in pixel sizes (300x300, 600x600, 1250x1250); the named product
+// sizes such as large.png do not exist for them and answer 403.
+const RECIPE_IMAGE_SIZE = "600x600"
+
+export function buildImageUrl(
   imageId: string | null,
   namespace: string | null,
   imageBaseUrl?: string,
 ): string | null {
   if (!imageId || !imageBaseUrl) return null
   const path = namespace && !imageId.includes("/") ? `${namespace}/${imageId}` : imageId
-  return `${imageBaseUrl.replace(/\/$/, "")}/${path}/large.png`
+  return `${imageBaseUrl.replace(/\/$/, "")}/${path}/${RECIPE_IMAGE_SIZE}.png`
 }
 
 export interface ParseRecipeOptions {
