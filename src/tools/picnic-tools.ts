@@ -152,6 +152,7 @@ interface PicnicPromotionProduct {
   unit?: string
   promotion_label?: string
   original_price?: number
+  discount_percent?: number
   image_id?: string
   max_count?: number
 }
@@ -196,6 +197,12 @@ function toPromotionProduct(tile: UnknownRecord): PicnicPromotionProduct | null 
         : null
   if (price === null) return null
 
+  const originalPrice =
+    typeof promotion.strikethrough_price === "number" &&
+    promotion.show_strikethrough_price !== false
+      ? promotion.strikethrough_price
+      : undefined
+
   return {
     product_id: sellingUnit.id,
     promotion_id: promotion.promotion_id,
@@ -205,9 +212,12 @@ function toPromotionProduct(tile: UnknownRecord): PicnicPromotionProduct | null 
     ...(typeof promotion.promotion_label === "string" && {
       promotion_label: promotion.promotion_label,
     }),
-    ...(typeof promotion.strikethrough_price === "number" &&
-      promotion.show_strikethrough_price !== false && {
-        original_price: promotion.strikethrough_price,
+    ...(originalPrice !== undefined && { original_price: originalPrice }),
+    // Lets callers rank deals. Only computable when Picnic shows the old price, which it does
+    // not for deals such as "1+1 gratis".
+    ...(originalPrice !== undefined &&
+      originalPrice > 0 && {
+        discount_percent: Math.round((1 - price / originalPrice) * 100),
       }),
     ...(typeof sellingUnit.image_id === "string" && { image_id: sellingUnit.image_id }),
     ...(typeof sellingUnit.max_count === "number" && { max_count: sellingUnit.max_count }),
@@ -242,6 +252,83 @@ function extractPromotionsFromPage(page: unknown): PicnicPromotionProduct[] {
   return promotions
 }
 
+/** Lowercases text and strips its accents, so "Crème" matches "creme". */
+function normalizeText(text: string): string {
+  return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
+}
+
+/** Orders promotions by discount, highest first; promotions without a known discount go last. */
+function compareDiscountDescending(a: PicnicPromotionProduct, b: PicnicPromotionProduct): number {
+  if (a.discount_percent === undefined) return b.discount_percent === undefined ? 0 : 1
+  if (b.discount_percent === undefined) return -1
+  return b.discount_percent - a.discount_percent
+}
+
+/**
+ * Applies picnic_get_promotions' query filter and sort order. Runs before pagination, so
+ * offset, limit and total all refer to the filtered list.
+ */
+function selectPromotions(
+  promotions: PicnicPromotionProduct[],
+  query: string | undefined,
+  sort: "page" | "discount",
+): PicnicPromotionProduct[] {
+  const needle = query === undefined ? undefined : normalizeText(query)
+  const selected =
+    needle === undefined
+      ? [...promotions]
+      : promotions.filter((promotion) =>
+          [promotion.name, promotion.promotion_label].some(
+            (text) => text !== undefined && normalizeText(text).includes(needle),
+          ),
+        )
+  // Array.prototype.sort is stable, so promotions with equal discounts keep the app's order.
+  if (sort === "discount") selected.sort(compareDiscountDescending)
+  return selected
+}
+
+// How many Picnic requests a batch tool keeps in flight at once: enough to get through a batch
+// of 20-odd items quickly, without firing all of them at Picnic in the same instant.
+const BATCH_CONCURRENCY = 5
+
+/**
+ * Returns a runner that lets at most `max` of the tasks given to it run at the same time; the
+ * others wait, in order, for a free slot.
+ */
+function concurrencyLimit(max: number) {
+  let active = 0
+  const waiting: Array<() => void> = []
+  return async <T>(task: () => Promise<T>): Promise<T> => {
+    if (active < max) active++
+    else await new Promise<void>((resolve) => waiting.push(resolve))
+    try {
+      return await task()
+    } finally {
+      // Hand the slot straight to the next waiting task instead of freeing it, so a task
+      // arriving in between cannot take it as well.
+      const next = waiting.shift()
+      if (next) next()
+      else active--
+    }
+  }
+}
+
+// picnic-api does not export its domain types from the package root, so derive them.
+type CatalogService = ReturnType<typeof getPicnicClient>["catalog"]
+type SearchProduct = Awaited<ReturnType<CatalogService["search"]>>[number]
+
+/** The compact product fields the search tools return. */
+function toSearchResult(product: SearchProduct) {
+  return {
+    id: product.id,
+    name: product.name,
+    price: product.display_price,
+    unit: product.unit_quantity,
+    // Only include image_id if it exists, for potential image retrieval
+    ...(product.image_id && { image_id: product.image_id }),
+  }
+}
+
 // Search products tool
 const searchInputSchema = z.object({
   query: z.string().describe("Search query for products"),
@@ -274,14 +361,7 @@ toolRegistry.register({
     const paginatedResults = allResults.slice(startIndex, startIndex + limit)
 
     // Filter results to only include essential data for LLM
-    const filteredResults = paginatedResults.map((product) => ({
-      id: product.id,
-      name: product.name,
-      price: product.display_price,
-      unit: product.unit_quantity,
-      // Only include image_id if it exists, for potential image retrieval
-      ...(product.image_id && { image_id: product.image_id }),
-    }))
+    const filteredResults = paginatedResults.map(toSearchResult)
 
     return {
       query: args.query,
@@ -293,6 +373,58 @@ toolRegistry.register({
         total: allResults.length,
         hasMore: startIndex + limit < allResults.length,
       },
+    }
+  },
+})
+
+// Batch search tool
+//
+// Planning a week of meals means searching 20-odd ingredients; one call for all of them saves a
+// round trip per ingredient. Each query is searched on its own, so one failure loses only its
+// own results.
+const SEARCH_MANY_MAX_QUERIES = 25
+
+toolRegistry.register({
+  name: "picnic_search_many",
+  description:
+    "Search Picnic for several products in one call, e.g. all ingredients of a weekly menu, " +
+    "instead of calling picnic_search once per product. Returns the top results per query (id, " +
+    "name, price, unit, image_id) plus the query's total hit count, in input order. A query " +
+    "that fails gets an entry with its error and does not fail the others.",
+  inputSchema: z.object({
+    queries: z
+      .array(z.string().trim().min(1))
+      .min(1)
+      .max(SEARCH_MANY_MAX_QUERIES)
+      .describe(`Search queries, up to ${SEARCH_MANY_MAX_QUERIES}, e.g. ["kipfilet", "broccoli"].`),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(20)
+      .default(5)
+      .describe("Maximum number of results per query (1-20, default: 5)"),
+  }),
+  annotations: READ_ONLY_ANNOTATIONS,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const limit = args.limit ?? 5
+    const run = concurrencyLimit(BATCH_CONCURRENCY)
+    const settled = await Promise.allSettled(
+      args.queries.map((query) => run(() => client.catalog.search(query))),
+    )
+
+    return {
+      searches: settled.map((result, index) => {
+        const query = args.queries[index]
+        if (result.status === "rejected") return { query, error: getErrorMessage(result.reason) }
+        return {
+          query,
+          results: result.value.slice(0, limit).map(toSearchResult),
+          total: result.value.length,
+        }
+      }),
     }
   },
 })
@@ -310,14 +442,32 @@ const promotionsInputSchema = z.object({
     .min(0)
     .default(0)
     .describe("Number of promotions to skip for pagination (default: 0)"),
+  query: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe(
+      "Only return promotions whose name or promotion label contains this text, ignoring case " +
+        "and accents, e.g. 'kip' or '1+1'.",
+    ),
+  sort: z
+    .enum(["page", "discount"])
+    .default("page")
+    .describe(
+      "'page' keeps the app's order (default). 'discount' puts the highest discount_percent " +
+        "first; promotions without one, such as '1+1 gratis', come last.",
+    ),
 })
 
 toolRegistry.register({
   name: "picnic_get_promotions",
   description:
     "Get Picnic's current weekly promotions/deals from the app's 'Alle acties' page. " +
-    "Returns promoted products with current price, promotion label, original price when shown, " +
-    "and pagination.",
+    "Returns promoted products with current price, promotion label, original price and " +
+    "discount_percent when Picnic shows the old price, and pagination. Filter with query and " +
+    "sort by discount to find relevant deals without paging through all of them; total then " +
+    "counts the matching promotions only.",
   inputSchema: promotionsInputSchema,
   annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
@@ -329,11 +479,15 @@ toolRegistry.register({
       null,
       true,
     )
-    const allPromotions = extractPromotionsFromPage(page)
+    const matching = selectPromotions(
+      extractPromotionsFromPage(page),
+      args.query,
+      args.sort ?? "page",
+    )
 
     const startIndex = args.offset ?? 0
     const limit = args.limit ?? 25
-    const promotions = allPromotions.slice(startIndex, startIndex + limit)
+    const promotions = matching.slice(startIndex, startIndex + limit)
 
     return {
       source: {
@@ -345,8 +499,8 @@ toolRegistry.register({
         offset: startIndex,
         limit,
         returned: promotions.length,
-        total: allPromotions.length,
-        hasMore: startIndex + limit < allPromotions.length,
+        total: matching.length,
+        hasMore: startIndex + limit < matching.length,
       },
     }
   },
@@ -414,6 +568,120 @@ toolRegistry.register({
       price: details.displayPrice,
       unit: details.unitQuantity,
       ...(details.imageIds.length > 0 && { image_id: details.imageIds[0] }),
+    }
+  },
+})
+
+// Batch product check tool
+//
+// Checking a week's products for dietary needs (no pork, no lactose) otherwise takes a full
+// details call per product. This returns only what such a check needs, for many at once.
+const CHECK_PRODUCTS_MAX = 20
+// Words reported per flagged keyword: enough to tell a real hit from an accidental one.
+const FLAG_WORDS_MAX = 3
+
+type ProductDetails = Awaited<ReturnType<CatalogService["getProductDetails"]>>
+
+// Ingredients section titles after normalizeText: "Ingrediënten" (NL), "Ingrédients" (FR) and
+// "Zutaten" (DE).
+const INGREDIENTS_TITLE_RE = /ingredi|zutaten/
+const WORD_CHAR_RE = /[\p{L}\p{N}]/u
+
+/** The text of a product's ingredients section without markdown emphasis, or null if none. */
+function getIngredientsText(details: ProductDetails): string | null {
+  const text = (details.infoSections ?? [])
+    .filter((section) => INGREDIENTS_TITLE_RE.test(normalizeText(section.title)))
+    .map((section) => section.content.replace(/\*\*|__/g, "").trim())
+    .filter(Boolean)
+    .join("\n")
+  return text || null
+}
+
+/**
+ * Returns the words of `text` that contain `keyword`, ignoring case and accents. Matching inside
+ * words catches Dutch compounds (varken in varkensvlees, boter in roomboter); returning the
+ * whole word lets the caller dismiss accidental hits (ham in champignons).
+ */
+function findKeywordWords(text: string, keyword: string): string[] {
+  const haystack = normalizeText(text)
+  const needle = normalizeText(keyword)
+  if (!needle) return []
+
+  const words = new Set<string>()
+  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
+    let start = at
+    let end = at + needle.length
+    while (start > 0 && WORD_CHAR_RE.test(haystack[start - 1])) start--
+    while (end < haystack.length && WORD_CHAR_RE.test(haystack[end])) end++
+    words.add(haystack.slice(start, end))
+  }
+  return [...words]
+}
+
+/** The fields a dietary check needs, plus the keyword hits when keywords are given. */
+function toProductCheck(details: ProductDetails, keywords: string[] | undefined) {
+  const allergens = details.allergens ?? []
+  const ingredients = getIngredientsText(details)
+  const check = {
+    id: details.id,
+    name: details.name,
+    ...(details.brand && { brand: details.brand }),
+    allergens,
+    // null rather than left out, so a missing ingredients list cannot pass for a clean one
+    ingredients,
+  }
+  if (!keywords?.length) return check
+
+  const texts = [details.name, ingredients ?? "", ...allergens]
+  const flags: Record<string, string[]> = {}
+  for (const keyword of keywords) {
+    const words = [...new Set(texts.flatMap((text) => findKeywordWords(text, keyword)))]
+    if (words.length > 0) flags[keyword] = words.slice(0, FLAG_WORDS_MAX)
+  }
+  return { ...check, flags }
+}
+
+toolRegistry.register({
+  name: "picnic_check_products",
+  description:
+    "Check up to 20 products in one call, e.g. for dietary needs: returns each product's name, " +
+    "brand, allergens and ingredients text. With flag_keywords it also lists, per product, " +
+    "which keywords occur in its name, allergens or ingredients and in which words, so " +
+    "accidental hits (ham in champignons) can be dismissed. No flags is no proof of absence: " +
+    "ingredients is null when Picnic lists none. A product that fails gets an entry with its " +
+    "error and does not fail the others.",
+  inputSchema: z.object({
+    product_ids: z
+      .array(z.string().min(1))
+      .min(1)
+      .max(CHECK_PRODUCTS_MAX)
+      .describe(
+        `Product (selling unit) IDs, up to ${CHECK_PRODUCTS_MAX}, as returned by picnic_search.`,
+      ),
+    flag_keywords: z
+      .array(z.string().trim().min(1))
+      .max(20)
+      .optional()
+      .describe(
+        'Words to look for, e.g. ["varken", "spek", "vis", "lactose", "melk"]. Matched ' +
+          "ignoring case and accents, also inside longer words (varken finds varkensvlees).",
+      ),
+  }),
+  annotations: READ_ONLY_ANNOTATIONS,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const run = concurrencyLimit(BATCH_CONCURRENCY)
+    const settled = await Promise.allSettled(
+      args.product_ids.map((id) => run(() => client.catalog.getProductDetails(id))),
+    )
+
+    return {
+      products: settled.map((result, index) =>
+        result.status === "fulfilled"
+          ? toProductCheck(result.value, args.flag_keywords)
+          : { id: args.product_ids[index], error: getErrorMessage(result.reason) },
+      ),
     }
   },
 })
@@ -1096,13 +1364,67 @@ toolRegistry.register({
   },
 })
 
+/** Sets the note of a just-created recipe, returning the outcome instead of throwing. */
+async function setNewRecipeNote(
+  client: ReturnType<typeof getPicnicClient>,
+  recipeId: string,
+  note: string,
+) {
+  try {
+    await client.recipe.setUserDefinedRecipeNote(recipeId, noteToHtml(note))
+    return { noteSet: true }
+  } catch (error) {
+    return {
+      noteSet: false,
+      noteError: `${getErrorMessage(error)}. Set it with picnic_set_recipe_note.`,
+    }
+  }
+}
+
+/**
+ * Gives a just-created recipe Picnic's first suggested image, returning the outcome instead of
+ * throwing. The suggestion is sent along with its reference image, as picnic_set_recipe_image
+ * does.
+ */
+async function selectFirstSuggestedImage(
+  client: ReturnType<typeof getPicnicClient>,
+  recipeId: string,
+) {
+  try {
+    // The suggestions come from a page about the recipe, which Picnic can briefly fail to
+    // render right after the recipe was created or its note set; readRecipe retries that.
+    const [suggestion] = await readRecipe(() =>
+      client.recipe.getUserDefinedRecipeSuggestedImages(recipeId),
+    )
+    if (!suggestion) {
+      return {
+        imageSet: false,
+        imageError:
+          "Picnic suggested no images for this recipe. Upload one with picnic_set_recipe_image.",
+      }
+    }
+    await client.recipe.selectUserDefinedRecipeImage(
+      recipeId,
+      suggestion.id,
+      suggestion.referenceImage,
+    )
+    return { imageSet: true, imageId: suggestion.id }
+  } catch (error) {
+    return {
+      imageSet: false,
+      imageError: `${getErrorMessage(error)}. Set it with picnic_set_recipe_image.`,
+    }
+  }
+}
+
 toolRegistry.register({
   name: "picnic_create_recipe",
   description:
     "Create a new own recipe in the user's Picnic cookbook ('Eigen recepten') from Picnic " +
     "products. Look up product IDs with picnic_search first; put steps and anything Picnic does " +
-    "not sell in the note. Not idempotent: every call creates another recipe. The returned " +
-    "recipeId works with every recipe tool, e.g. picnic_add_recipe_to_cart.",
+    "not sell in the note. Pass image 'auto' to also give it Picnic's first suggested image. " +
+    "Not idempotent: every call creates another recipe. The returned recipeId works with every " +
+    "recipe tool, e.g. picnic_add_recipe_to_cart.",
   inputSchema: z.object({
     name: recipeNameSchema,
     ingredients: z
@@ -1124,6 +1446,13 @@ toolRegistry.register({
       .default(4)
       .describe("Number of portions the quantities are for (default 4)."),
     note: recipeNoteSchema.optional(),
+    image: z
+      .enum(["auto"])
+      .optional()
+      .describe(
+        "'auto' selects Picnic's first suggested image right after creating the recipe, " +
+          "saving the picnic_get_recipe_image_suggestions and picnic_set_recipe_image calls.",
+      ),
   }),
   annotations: RECIPE_CREATE_ANNOTATIONS,
   handler: async (args) => {
@@ -1149,20 +1478,14 @@ toolRegistry.register({
       name: args.name,
       portions,
     }
-    if (args.note === undefined) return created
 
-    // The recipe exists at this point, so report a failed note instead of failing the call;
-    // a retry of the whole tool would create a duplicate recipe.
-    try {
-      await client.recipe.setUserDefinedRecipeNote(sellingGroupId, noteToHtml(args.note))
-      return { ...created, noteSet: true }
-    } catch (error) {
-      return {
-        ...created,
-        noteSet: false,
-        noteError: `${getErrorMessage(error)}. Set it with picnic_set_recipe_note.`,
-      }
-    }
+    // The recipe exists at this point, so report a failed note or image instead of failing the
+    // call; a retry of the whole tool would create a duplicate recipe.
+    const note =
+      args.note === undefined ? {} : await setNewRecipeNote(client, sellingGroupId, args.note)
+    const image =
+      args.image === "auto" ? await selectFirstSuggestedImage(client, sellingGroupId) : {}
+    return { ...created, ...note, ...image }
   },
 })
 
@@ -1666,6 +1989,83 @@ toolRegistry.register({
   },
 })
 
+// Overview tool
+//
+// Answers "where do things stand?" in one call: cart totals, the selected delivery slot and how
+// far the cart is from that slot's minimum order value, and deliveries under way. The full cart
+// contents and slot list stay with picnic_get_cart and picnic_get_delivery_slots.
+type Cart = Awaited<ReturnType<ReturnType<typeof getPicnicClient>["cart"]["getCart"]>>
+type Delivery = Awaited<
+  ReturnType<ReturnType<typeof getPicnicClient>["delivery"]["getDeliveries"]>
+>[number]
+
+/** The selected delivery slot, with how much the cart still lacks to reach its minimum. */
+function summarizeSelectedSlot(cart: Cart) {
+  const selection = cart.selected_slot
+  const slot =
+    cart.delivery_slots?.find((candidate) => candidate.slot_id === selection?.slot_id) ??
+    cart.delivery_slots?.find((candidate) => candidate.selected)
+  if (!slot) {
+    return selection?.slot_id ? { slot_id: selection.slot_id, state: selection.state } : null
+  }
+
+  const minimum = slot.minimum_order_value
+  return {
+    slot_id: slot.slot_id,
+    ...(selection?.state && { state: selection.state }),
+    window_start: slot.window_start,
+    window_end: slot.window_end,
+    cut_off_time: slot.cut_off_time,
+    ...(slot.is_available === false && { is_available: false }),
+    ...(minimum !== undefined && {
+      minimum_order_value: minimum,
+      missing_for_minimum: Math.max(0, minimum - (cart.total_price ?? 0)),
+    }),
+  }
+}
+
+/** A delivery's status and timing, without its orders. */
+function summarizeDelivery(delivery: Delivery) {
+  return {
+    delivery_id: delivery.delivery_id,
+    status: delivery.status,
+    window_start: delivery.slot?.window_start,
+    window_end: delivery.slot?.window_end,
+    // Picnic's estimated arrival window (eta2), once it has one.
+    ...(delivery.eta2 && { eta_start: delivery.eta2.start, eta_end: delivery.eta2.end }),
+  }
+}
+
+toolRegistry.register({
+  name: "picnic_get_overview",
+  description:
+    "Get a compact status overview in one call: cart totals (total_count, total_price, " +
+    "total_savings), the selected delivery slot (window, cut-off time, minimum order value and " +
+    "missing_for_minimum, the minimum minus total_price) and current deliveries (window, " +
+    "estimated arrival, status). Prices are in cents. Use picnic_get_cart for the cart's " +
+    "contents and picnic_get_delivery_slots for other slots.",
+  inputSchema: z.object({}),
+  annotations: READ_ONLY_ANNOTATIONS,
+  handler: async () => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+    const [cart, deliveries] = await Promise.all([
+      client.cart.getCart(),
+      client.delivery.getDeliveries(["CURRENT"]),
+    ])
+
+    return {
+      cart: {
+        total_count: cart.total_count,
+        total_price: cart.total_price,
+        total_savings: cart.total_savings,
+      },
+      selected_slot: summarizeSelectedSlot(cart),
+      current_deliveries: deliveries.map(summarizeDelivery),
+    }
+  },
+})
+
 // Add product to cart tool
 const addToCartInputSchema = z.object({
   productId: z.string().describe("The ID of the product to add"),
@@ -1687,6 +2087,62 @@ toolRegistry.register({
     )
     return {
       message: `Added ${args.count} item(s) to cart`,
+      cart: filterCartData(cart),
+    }
+  },
+})
+
+// Bulk add-to-cart tool
+//
+// Adds a whole shopping list in one request (POST /cart/products/add) instead of one
+// picnic_add_to_cart call per product.
+const ADD_PRODUCTS_MAX = 50
+
+toolRegistry.register({
+  name: "picnic_add_products_to_cart",
+  description:
+    "Add several products to the shopping cart in one request, e.g. a weekly shopping list, " +
+    "instead of calling picnic_add_to_cart per product. Repeated productIds are merged. " +
+    "Unverified: Picnic's bulk endpoint may set a product's cart quantity to `count` instead " +
+    "of adding `count` to what is already there. Until that is confirmed, check the quantities " +
+    "with picnic_get_cart afterwards, especially for products that were already in the cart. " +
+    "Not idempotent: if this fails, call picnic_get_cart to check whether the add landed " +
+    "before retrying.",
+  inputSchema: z.object({
+    products: z
+      .array(
+        z.object({
+          productId: z.string().min(1).describe("The ID of the product to add"),
+          count: z.number().int().min(1).default(1).describe("Number of items to add (default 1)"),
+        }),
+      )
+      .min(1)
+      .max(ADD_PRODUCTS_MAX)
+      .describe(`The products to add, up to ${ADD_PRODUCTS_MAX}.`),
+  }),
+  annotations: CART_MUTATION_ANNOTATIONS,
+  handler: async (args) => {
+    await ensureClientInitialized()
+    const client = getPicnicClient()
+
+    // The endpoint takes one quantity per product id, so a repeated product would keep only
+    // its last count; add the counts up instead.
+    const counts = new Map<string, number>()
+    for (const product of args.products) {
+      counts.set(product.productId, (counts.get(product.productId) ?? 0) + (product.count ?? 1))
+    }
+    const products = [...counts].map(([productId, quantity]) => ({ productId, quantity }))
+
+    const cart = await mutateCart(`Adding ${products.length} product(s) to cart`, () =>
+      client.cart.addProductsToCart(products),
+    )
+    return {
+      message: `Added ${products.length} product(s) to cart`,
+      // Repeated in the result, where the caller decides what to do next, until the endpoint's
+      // behaviour for products already in the cart is verified.
+      note:
+        "Unverified whether Picnic added these counts to quantities already in the cart or " +
+        "replaced them; check the quantities below.",
       cart: filterCartData(cart),
     }
   },

@@ -159,6 +159,134 @@ describe("own recipe tools", () => {
       expect(payload.noteError).toMatch(/picnic_set_recipe_note/)
     })
 
+    describe("image auto", () => {
+      const referenceImage = {
+        id: "img1",
+        namespace: "recipes",
+        primary_image: true,
+        rank_value: 1,
+        sellable_id: "0123456789abcdef01234567",
+        type: "SUGGESTED",
+      }
+
+      it("selects the first suggested image together with its reference metadata", async () => {
+        mocks.recipe.createUserDefinedRecipe.mockResolvedValue({ sellingGroupId: OWN_RECIPE })
+        mocks.recipe.setUserDefinedRecipeNote.mockResolvedValueOnce({})
+        mocks.recipe.getUserDefinedRecipeSuggestedImages.mockResolvedValueOnce([
+          { id: "img1", referenceImage },
+          { id: "img2", referenceImage: { ...referenceImage, id: "img2" } },
+        ])
+        mocks.recipe.selectUserDefinedRecipeImage.mockResolvedValueOnce({})
+
+        const toolRegistry = await loadTools()
+        const payload = parseToolResult(
+          await toolRegistry.executeTool("picnic_create_recipe", {
+            name: "Pasta pesto",
+            ingredients: [{ product_id: "s100" }],
+            note: "Kook de pasta",
+            image: "auto",
+          }),
+        )
+
+        expect(mocks.recipe.getUserDefinedRecipeSuggestedImages).toHaveBeenCalledWith(OWN_RECIPE)
+        expect(mocks.recipe.selectUserDefinedRecipeImage).toHaveBeenCalledWith(
+          OWN_RECIPE,
+          "img1",
+          referenceImage,
+        )
+        expect(payload).toMatchObject({
+          recipeId: OWN_RECIPE,
+          noteSet: true,
+          imageSet: true,
+          imageId: "img1",
+        })
+      })
+
+      // Like a failed note: the recipe exists, so failing the call would invite a retry that
+      // creates a duplicate recipe.
+      it("still returns the new recipe when selecting the image fails", async () => {
+        mocks.recipe.createUserDefinedRecipe.mockResolvedValue({ sellingGroupId: OWN_RECIPE })
+        mocks.recipe.getUserDefinedRecipeSuggestedImages.mockResolvedValueOnce([
+          { id: "img1", referenceImage },
+        ])
+        mocks.recipe.selectUserDefinedRecipeImage.mockRejectedValueOnce(new Error("boom"))
+
+        const toolRegistry = await loadTools()
+        const payload = parseToolResult(
+          await toolRegistry.executeTool("picnic_create_recipe", {
+            name: "Pasta pesto",
+            ingredients: [{ product_id: "s100" }],
+            image: "auto",
+          }),
+        )
+
+        expect(mocks.recipe.createUserDefinedRecipe).toHaveBeenCalledTimes(1)
+        expect(payload.recipeId).toBe(OWN_RECIPE)
+        expect(payload.imageSet).toBe(false)
+        expect(payload.imageError).toMatch(/boom.*picnic_set_recipe_image/)
+      })
+
+      it("reports a recipe without suggested images instead of failing", async () => {
+        mocks.recipe.createUserDefinedRecipe.mockResolvedValue({ sellingGroupId: OWN_RECIPE })
+        mocks.recipe.getUserDefinedRecipeSuggestedImages.mockResolvedValueOnce([])
+
+        const toolRegistry = await loadTools()
+        const payload = parseToolResult(
+          await toolRegistry.executeTool("picnic_create_recipe", {
+            name: "Pasta pesto",
+            ingredients: [{ product_id: "s100" }],
+            image: "auto",
+          }),
+        )
+
+        expect(mocks.recipe.selectUserDefinedRecipeImage).not.toHaveBeenCalled()
+        expect(payload).toMatchObject({ recipeId: OWN_RECIPE, imageSet: false })
+        expect(payload.imageError).toMatch(/picnic_set_recipe_image/)
+      })
+
+      // The suggestions page is read right after the recipe was created, when Picnic can
+      // briefly fail to render it.
+      it("retries reading the suggestions when Picnic briefly fails to render them", async () => {
+        mocks.recipe.createUserDefinedRecipe.mockResolvedValue({ sellingGroupId: OWN_RECIPE })
+        mocks.recipe.getUserDefinedRecipeSuggestedImages
+          .mockRejectedValueOnce(new Error("Error rendering page_id='sellable-image-selection'"))
+          .mockResolvedValueOnce([{ id: "img1", referenceImage }])
+        mocks.recipe.selectUserDefinedRecipeImage.mockResolvedValueOnce({})
+
+        const toolRegistry = await loadTools()
+        vi.useFakeTimers()
+        try {
+          const pending = toolRegistry.executeTool("picnic_create_recipe", {
+            name: "Pasta pesto",
+            ingredients: [{ product_id: "s100" }],
+            image: "auto",
+          })
+          await vi.runAllTimersAsync()
+          const payload = parseToolResult(await pending)
+
+          expect(mocks.recipe.getUserDefinedRecipeSuggestedImages).toHaveBeenCalledTimes(2)
+          expect(payload).toMatchObject({ imageSet: true, imageId: "img1" })
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it("leaves the image alone when image is not requested", async () => {
+        mocks.recipe.createUserDefinedRecipe.mockResolvedValue({ sellingGroupId: OWN_RECIPE })
+
+        const toolRegistry = await loadTools()
+        const payload = parseToolResult(
+          await toolRegistry.executeTool("picnic_create_recipe", {
+            name: "Pasta pesto",
+            ingredients: [{ product_id: "s100" }],
+          }),
+        )
+
+        expect(mocks.recipe.getUserDefinedRecipeSuggestedImages).not.toHaveBeenCalled()
+        expect(payload).not.toHaveProperty("imageSet")
+      })
+    })
+
     it("rejects names over the app's 43 character limit before calling Picnic", async () => {
       const toolRegistry = await loadTools()
 

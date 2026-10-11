@@ -576,9 +576,11 @@ The server provides comprehensive access to Picnic's functionality through 30+ s
 ### Product Discovery & Search
 
 - **`picnic_search`** - Search for products by name or keywords
-- **`picnic_get_promotions`** - Get current weekly promotions/deals with prices and labels
+- **`picnic_search_many`** - Search for up to 25 products in one call, e.g. a weekly menu's ingredients
+- **`picnic_get_promotions`** - Get current weekly promotions/deals with prices, labels and discount percentages; filter by text and sort by discount
 - **`picnic_get_suggestions`** - Get product suggestions based on query
 - **`picnic_get_product_details`** - Get detailed information about a specific product
+- **`picnic_check_products`** - Get allergens and ingredients of up to 20 products at once, optionally flagging keywords (e.g. pork or lactose)
 - **`picnic_get_image`** - Get product images in various sizes (tiny to extra-large)
 - **`picnic_get_page`** - Fetch a raw Picnic app page (Fusion or React Server Components) as JSON text
 
@@ -602,7 +604,7 @@ The server provides comprehensive access to Picnic's functionality through 30+ s
 ### Own Recipes
 
 - **`picnic_get_own_recipe`** - Get an own recipe with its ingredients, portions and note
-- **`picnic_create_recipe`** - Create an own recipe from Picnic products, with an optional note
+- **`picnic_create_recipe`** - Create an own recipe from Picnic products, with an optional note and suggested image
 - **`picnic_rename_recipe`** - Rename an own recipe
 - **`picnic_update_recipe_portions`** - Change the default number of portions
 - **`picnic_delete_recipe`** - Permanently delete an own recipe
@@ -617,7 +619,9 @@ The server provides comprehensive access to Picnic's functionality through 30+ s
 ### Shopping Cart Management
 
 - **`picnic_get_cart`** - View current shopping cart contents and totals
+- **`picnic_get_overview`** - Cart totals, the selected delivery slot (with how much is missing to reach its minimum order value) and current deliveries in one call
 - **`picnic_add_to_cart`** - Add products to cart with specified quantities
+- **`picnic_add_products_to_cart`** - Add many products to the cart in one request
 - **`picnic_remove_from_cart`** - Remove products from cart with specified quantities
 - **`picnic_clear_cart`** - Clear all items from the shopping cart
 

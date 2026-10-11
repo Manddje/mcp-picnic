@@ -36,6 +36,17 @@ Search for products in Picnic.
 - `limit` (number, optional): Maximum number of results to return (1-20, default: 5)
 - `offset` (number, optional): Number of results to skip for pagination (default: 0)
 
+#### `picnic_search_many`
+
+Search for several products in one call, e.g. all ingredients of a weekly menu, instead of one `picnic_search` call per product. The queries run concurrently (at most five at a time).
+
+**Parameters:**
+
+- `queries` (array of strings): Search queries, up to 25
+- `limit` (number, optional): Maximum number of results per query (1-20, default: 5)
+
+**Returns:** One entry per query, in input order, with the same compact product fields as `picnic_search` (`id`, `name`, `price`, `unit`, `image_id`) and the query's `total` hit count. A query that fails gets an entry with its `error` instead; the other queries are unaffected.
+
 #### `picnic_get_promotions`
 
 Get Picnic's current weekly promotions/deals from the app's "Alle acties" page.
@@ -44,8 +55,10 @@ Get Picnic's current weekly promotions/deals from the app's "Alle acties" page.
 
 - `limit` (number, optional): Maximum number of promotions to return (1-100, default: 25)
 - `offset` (number, optional): Number of promotions to skip for pagination (default: 0)
+- `query` (string, optional): Only return promotions whose name or promotion label contains this text, ignoring case and accents (e.g. `"kip"` or `"1+1"`)
+- `sort` (string, optional): `"page"` keeps the app's order (default); `"discount"` puts the highest `discount_percent` first, with promotions that have none (such as "1+1 gratis") last
 
-**Returns:** Promoted products with product ID, promotion ID, name, current price, unit, promotion label, original price when shown, image ID, and pagination metadata.
+**Returns:** Promoted products with product ID, promotion ID, name, current price, unit, promotion label, original price and `discount_percent` when Picnic shows the old price, image ID, and pagination metadata. Filtering and sorting happen before pagination, so `total` counts the matching promotions only.
 
 #### `picnic_get_suggestions`
 
@@ -63,6 +76,17 @@ Look up product details by selling unit ID.
 
 - `productId` (string): The product selling unit ID returned by search or cart
 - `full` (boolean, optional): Return full product details, including description, allergens, nutritional info, promotions, and similar products
+
+#### `picnic_check_products`
+
+Check up to 20 products in one call, e.g. for dietary needs. Returns each product's name, brand, allergens and ingredients text (from the product page's ingredients section), fetched concurrently (at most five at a time).
+
+**Parameters:**
+
+- `product_ids` (array of strings): Product (selling unit) IDs, up to 20
+- `flag_keywords` (array of strings, optional): Words to look for, e.g. `["varken", "spek", "vis", "lactose"]`
+
+**Returns:** One entry per product, in input order. With `flag_keywords`, each entry also has `flags`: the keywords found in the product's name, allergens or ingredients, each with the words it was found in. Matching ignores case and accents and also finds keywords inside longer words, which catches compounds (`varken` finds `varkensvlees`) but also accidental hits (`ham` finds `champignons`); the reported words show which is which. An empty `flags` is no proof of absence: `ingredients` is `null` when Picnic lists none. A product that fails gets an entry with its `error`; the others are unaffected.
 
 #### `picnic_get_image`
 
@@ -91,6 +115,16 @@ Get product image data.
 
 Get the current shopping cart contents.
 
+#### `picnic_get_overview`
+
+Get a compact status overview in one call, without the cart's contents:
+
+- `cart`: `total_count`, `total_price` and `total_savings`
+- `selected_slot`: the selected delivery slot's window, cut-off time, minimum order value and `missing_for_minimum` (the minimum order value minus `total_price`, at least 0); `null` when no slot is selected
+- `current_deliveries`: each current delivery's ID, status, delivery window and, once Picnic has one, estimated arrival window
+
+Prices are in cents.
+
 #### `picnic_add_to_cart`
 
 Add a product to the shopping cart.
@@ -99,6 +133,16 @@ Add a product to the shopping cart.
 
 - `productId` (string): The ID of the product to add
 - `count` (number, optional): Number of items to add (default: 1)
+
+#### `picnic_add_products_to_cart`
+
+Add several products to the shopping cart in one request (`POST /cart/products/add`). Repeated product IDs are merged. Returns the resulting cart.
+
+**Unverified:** it is not yet confirmed whether this endpoint adds `count` to a product already in the cart or sets its quantity to `count`. Until that is verified, check the quantities with `picnic_get_cart` afterwards, especially for products that were already in the cart. Like the other cart mutations it is not idempotent: if it fails, check the cart before retrying.
+
+**Parameters:**
+
+- `products` (array): Up to 50 products as `{ "productId": "s1001524", "count": 1 }`; `count` defaults to 1
 
 #### `picnic_remove_from_cart`
 
@@ -362,6 +406,9 @@ Create a new own recipe. Not idempotent: every call creates another recipe.
 - `ingredients` (array): Products as `{ "product_id": "s1001524", "quantity": 1 }`; repeated products are merged
 - `portions` (number, optional): Number of portions the quantities are for (default: 4)
 - `note` (string, optional): Free-text note, max 5000 characters; each line becomes a paragraph
+- `image` (string, optional): `"auto"` gives the new recipe Picnic's first suggested image, saving the `picnic_get_recipe_image_suggestions` and `picnic_set_recipe_image` calls
+
+A note or image that fails to save does not fail the call, because the recipe already exists and a retry would create a duplicate. The result reports `noteSet` / `imageSet` as `false` with an error hint instead; fix it with `picnic_set_recipe_note` or `picnic_set_recipe_image`.
 
 #### `picnic_rename_recipe`
 

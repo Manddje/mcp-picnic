@@ -3,9 +3,11 @@ import type { ToolResult } from "../../../src/tools/registry.js"
 
 const mocks = vi.hoisted(() => ({
   addProductToCart: vi.fn(),
+  addProductsToCart: vi.fn(),
   removeProductFromCart: vi.fn(),
   clearCart: vi.fn(),
   getCart: vi.fn(),
+  getDeliveries: vi.fn(),
   initializePicnicClient: vi.fn(),
 }))
 
@@ -13,10 +15,12 @@ vi.mock("../../../src/utils/picnic-client.js", () => ({
   getPicnicClient: () => ({
     cart: {
       addProductToCart: mocks.addProductToCart,
+      addProductsToCart: mocks.addProductsToCart,
       removeProductFromCart: mocks.removeProductFromCart,
       clearCart: mocks.clearCart,
       getCart: mocks.getCart,
     },
+    delivery: { getDeliveries: mocks.getDeliveries },
     sendRequest: vi.fn(),
   }),
   initializePicnicClient: mocks.initializePicnicClient,
@@ -247,5 +251,256 @@ describe("picnic_get_cart quantities", () => {
 
     const cart = parseToolResult(await toolRegistry.executeTool("picnic_get_cart", {}))
     expect(cart.items[0].articles[0].quantity).toBe(1)
+  })
+})
+
+describe("picnic_add_products_to_cart", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    await import("../../../src/tools/picnic-tools.js")
+  })
+
+  function cartWith(lines: Array<{ productId: string; quantity: number }>) {
+    return {
+      type: "ORDER",
+      id: "shopping_cart",
+      total_count: lines.reduce((sum, line) => sum + line.quantity, 0),
+      items: lines.map((line, index) => ({
+        type: "ORDER_LINE",
+        id: `line-${index}`,
+        price: 100 * line.quantity,
+        items: [
+          {
+            id: line.productId,
+            name: `Product ${line.productId}`,
+            price: 100,
+            decorators: [{ type: "QUANTITY", quantity: line.quantity }],
+          },
+        ],
+      })),
+    }
+  }
+
+  it("adds all products in one request, merging repeated products", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+    mocks.addProductsToCart.mockResolvedValueOnce(
+      cartWith([
+        { productId: "s1", quantity: 3 },
+        { productId: "s2", quantity: 1 },
+      ]),
+    )
+
+    const payload = parseToolResult(
+      await toolRegistry.executeTool("picnic_add_products_to_cart", {
+        products: [{ productId: "s1", count: 2 }, { productId: "s2" }, { productId: "s1" }],
+      }),
+    )
+
+    // The endpoint keys quantities by product, so unmerged repeats would lose counts.
+    expect(mocks.addProductsToCart).toHaveBeenCalledTimes(1)
+    expect(mocks.addProductsToCart).toHaveBeenCalledWith([
+      { productId: "s1", quantity: 3 },
+      { productId: "s2", quantity: 1 },
+    ])
+    expect(mocks.addProductToCart).not.toHaveBeenCalled()
+    expect(payload.message).toBe("Added 2 product(s) to cart")
+    expect(
+      payload.cart.items.map((line: { articles: Array<Record<string, unknown>> }) => line.articles),
+    ).toEqual([
+      [expect.objectContaining({ product_id: "s1", quantity: 3 })],
+      [expect.objectContaining({ product_id: "s2", quantity: 1 })],
+    ])
+  })
+
+  it("warns that the cart may have changed when the bulk add fails, without retrying", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+    mocks.addProductsToCart.mockRejectedValueOnce(new Error("upstream detail"))
+
+    await expect(
+      toolRegistry.executeTool("picnic_add_products_to_cart", {
+        products: [{ productId: "s1" }, { productId: "s2" }],
+      }),
+    ).rejects.toThrow(/upstream detail.*may still have been modified.*picnic_get_cart/)
+    expect(mocks.addProductsToCart).toHaveBeenCalledTimes(1)
+  })
+
+  // Whether the endpoint adds to or replaces a quantity already in the cart is not verified
+  // yet, so the caller has to be told to check.
+  it("is a cart mutation whose description says to verify quantities with picnic_get_cart", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+    const tool = (
+      toolRegistry.getToolsList() as Array<{
+        name: string
+        description: string
+        annotations?: Record<string, boolean>
+      }>
+    ).find((candidate) => candidate.name === "picnic_add_products_to_cart")
+
+    expect(tool?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+    })
+    expect(tool?.description).toMatch(/unverified/i)
+    expect(tool?.description).toMatch(/check the quantities with picnic_get_cart/)
+  })
+
+  it("rejects an empty list and counts below one before calling Picnic", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+
+    for (const products of [[], [{ productId: "s1", count: 0 }]]) {
+      await expect(
+        toolRegistry.executeTool("picnic_add_products_to_cart", { products }),
+      ).rejects.toThrow(/Invalid input/)
+    }
+    expect(mocks.addProductsToCart).not.toHaveBeenCalled()
+  })
+})
+
+describe("picnic_get_overview", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    await import("../../../src/tools/picnic-tools.js")
+  })
+
+  function slot(overrides: Record<string, unknown> = {}) {
+    return {
+      slot_id: "slot-1",
+      hub_id: "hub",
+      fc_id: "fc",
+      window_start: "2026-10-14T17:00:00.000+02:00",
+      window_end: "2026-10-14T19:00:00.000+02:00",
+      cut_off_time: "2026-10-13T22:00:00.000+02:00",
+      is_available: true,
+      selected: false,
+      reserved: false,
+      minimum_order_value: 3500,
+      slot_characteristics: [],
+      ...overrides,
+    }
+  }
+
+  function cart(overrides: Record<string, unknown> = {}) {
+    return {
+      type: "ORDER",
+      id: "shopping_cart",
+      items: [{ id: "line-1", items: [{ id: "s1", name: "Kipfilet", price: 499 }] }],
+      delivery_slots: [
+        slot(),
+        slot({
+          slot_id: "slot-2",
+          window_start: "2026-10-15T18:00:00.000+02:00",
+          window_end: "2026-10-15T20:00:00.000+02:00",
+          cut_off_time: "2026-10-14T22:00:00.000+02:00",
+          minimum_order_value: 5000,
+        }),
+      ],
+      selected_slot: { slot_id: "slot-2", state: "EXPLICIT" },
+      total_count: 7,
+      total_price: 2890,
+      checkout_total_price: 2990,
+      total_savings: 150,
+      ...overrides,
+    }
+  }
+
+  it("summarizes the cart, the selected slot and current deliveries in one call", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+    mocks.getCart.mockResolvedValueOnce(cart())
+    mocks.getDeliveries.mockResolvedValueOnce([
+      {
+        delivery_id: "d1",
+        creation_time: "2026-10-10T09:00:00.000+02:00",
+        slot: slot({
+          window_start: "2026-10-12T17:00:00.000+02:00",
+          window_end: "2026-10-12T19:00:00.000+02:00",
+        }),
+        eta2: { start: "2026-10-12T17:40:00.000+02:00", end: "2026-10-12T18:00:00.000+02:00" },
+        status: "CURRENT",
+        orders: [{ id: "o1", total_price: 6420 }],
+      },
+      {
+        delivery_id: "d2",
+        creation_time: "2026-10-11T09:00:00.000+02:00",
+        slot: slot({
+          window_start: "2026-10-16T17:00:00.000+02:00",
+          window_end: "2026-10-16T19:00:00.000+02:00",
+        }),
+        status: "CURRENT",
+        orders: [],
+      },
+    ])
+
+    const payload = parseToolResult(await toolRegistry.executeTool("picnic_get_overview", {}))
+
+    expect(mocks.getDeliveries).toHaveBeenCalledWith(["CURRENT"])
+    // Totals only: the cart's lines and the full slot list stay out of the overview.
+    expect(payload).toEqual({
+      cart: { total_count: 7, total_price: 2890, total_savings: 150 },
+      selected_slot: {
+        slot_id: "slot-2",
+        state: "EXPLICIT",
+        window_start: "2026-10-15T18:00:00.000+02:00",
+        window_end: "2026-10-15T20:00:00.000+02:00",
+        cut_off_time: "2026-10-14T22:00:00.000+02:00",
+        minimum_order_value: 5000,
+        missing_for_minimum: 2110,
+      },
+      current_deliveries: [
+        {
+          delivery_id: "d1",
+          status: "CURRENT",
+          window_start: "2026-10-12T17:00:00.000+02:00",
+          window_end: "2026-10-12T19:00:00.000+02:00",
+          eta_start: "2026-10-12T17:40:00.000+02:00",
+          eta_end: "2026-10-12T18:00:00.000+02:00",
+        },
+        {
+          delivery_id: "d2",
+          status: "CURRENT",
+          window_start: "2026-10-16T17:00:00.000+02:00",
+          window_end: "2026-10-16T19:00:00.000+02:00",
+        },
+      ],
+    })
+  })
+
+  it("reports nothing missing once the cart reaches the minimum order value", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+    mocks.getCart.mockResolvedValueOnce(cart({ total_price: 6200 }))
+    mocks.getDeliveries.mockResolvedValueOnce([])
+
+    const payload = parseToolResult(await toolRegistry.executeTool("picnic_get_overview", {}))
+
+    expect(payload.selected_slot.missing_for_minimum).toBe(0)
+    expect(payload.current_deliveries).toEqual([])
+  })
+
+  it("falls back to the slot flagged as selected, and to null when there is none", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+    mocks.getDeliveries.mockResolvedValue([])
+    mocks.getCart
+      .mockResolvedValueOnce(
+        cart({ selected_slot: undefined, delivery_slots: [slot({ selected: true })] }),
+      )
+      .mockResolvedValueOnce(cart({ selected_slot: undefined, delivery_slots: [slot()] }))
+
+    const flagged = parseToolResult(await toolRegistry.executeTool("picnic_get_overview", {}))
+    const none = parseToolResult(await toolRegistry.executeTool("picnic_get_overview", {}))
+
+    expect(flagged.selected_slot).toMatchObject({ slot_id: "slot-1", missing_for_minimum: 610 })
+    expect(none.selected_slot).toBeNull()
+  })
+
+  it("is marked read-only", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+    const list = toolRegistry.getToolsList() as Array<{
+      name: string
+      annotations?: Record<string, boolean>
+    }>
+
+    expect(list.find((tool) => tool.name === "picnic_get_overview")?.annotations).toMatchObject({
+      readOnlyHint: true,
+    })
   })
 })
