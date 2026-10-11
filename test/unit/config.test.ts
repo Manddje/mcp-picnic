@@ -15,7 +15,7 @@ describe("Config Schema - PICNIC_COUNTRY_CODE (Issue #10 regression)", () => {
   const configSchema = z.object({
     PICNIC_USERNAME: z.string(),
     PICNIC_PASSWORD: z.string(),
-    PICNIC_COUNTRY_CODE: z.enum(["NL", "DE"]).default("NL"),
+    PICNIC_COUNTRY_CODE: z.enum(["NL", "DE", "FR"]).default("NL"),
     ENABLE_HTTP_SERVER: z
       .string()
       .transform((val) => val === "true")
@@ -60,12 +60,22 @@ describe("Config Schema - PICNIC_COUNTRY_CODE (Issue #10 regression)", () => {
       expect(result.PICNIC_COUNTRY_CODE).toBe("DE")
     })
 
+    it("should accept FR as PICNIC_COUNTRY_CODE", () => {
+      const result = configSchema.parse({
+        PICNIC_USERNAME: "test-user",
+        PICNIC_PASSWORD: "test-pass",
+        PICNIC_COUNTRY_CODE: "FR",
+      })
+
+      expect(result.PICNIC_COUNTRY_CODE).toBe("FR")
+    })
+
     it("should reject invalid country codes", () => {
       expect(() => {
         configSchema.parse({
           PICNIC_USERNAME: "test-user",
           PICNIC_PASSWORD: "test-pass",
-          PICNIC_COUNTRY_CODE: "FR", // Invalid country code
+          PICNIC_COUNTRY_CODE: "BE", // Invalid country code
         })
       }).toThrow()
     })
@@ -121,7 +131,7 @@ describe("Config Schema - PICNIC_COUNTRY_CODE (Issue #10 regression)", () => {
       expect(config).toHaveProperty("PICNIC_COUNTRY_CODE")
 
       // Verify it's one of the valid values
-      expect(["NL", "DE"]).toContain(config.PICNIC_COUNTRY_CODE)
+      expect(["NL", "DE", "FR"]).toContain(config.PICNIC_COUNTRY_CODE)
     })
   })
 
