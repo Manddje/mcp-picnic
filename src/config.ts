@@ -16,6 +16,11 @@ const configSchema = z.object({
   PICNIC_DEVICE_ID: z.string().optional(),
   PICNIC_DEVICE_FILE: z.string().default(defaultDeviceFile),
   PICNIC_AGENT: z.string().optional(),
+  // A cancelled delivery cannot be restored, so picnic_cancel_delivery is opt-in.
+  PICNIC_ENABLE_CANCEL_DELIVERY: z
+    .string()
+    .transform((val) => val === "true")
+    .default("false"),
   ENABLE_HTTP_SERVER: z
     .string()
     .transform((val) => val === "true")

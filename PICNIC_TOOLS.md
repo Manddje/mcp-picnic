@@ -161,7 +161,7 @@ Get driver and route information for a delivery.
 
 #### `picnic_cancel_delivery`
 
-Cancel a delivery order.
+Cancel a delivery order. A cancelled delivery cannot be restored, so this tool is only available when `PICNIC_ENABLE_CANCEL_DELIVERY=true` is set.
 
 **Parameters:**
 

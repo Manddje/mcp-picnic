@@ -1869,28 +1869,35 @@ toolRegistry.register({
 })
 
 // Cancel delivery tool
-toolRegistry.register({
-  name: "picnic_cancel_delivery",
-  description: "Cancel a delivery order",
-  inputSchema: deliveryInputSchema,
-  // A cancelled delivery cannot be restored, so this must never be retried blindly.
-  annotations: {
-    readOnlyHint: false,
-    destructiveHint: true,
-    idempotentHint: false,
-    openWorldHint: true,
-  },
-  handler: async (args) => {
-    await ensureClientInitialized()
-    const client = getPicnicClient()
-    const result = await client.delivery.cancelDelivery(args.deliveryId)
-    return {
-      message: "Delivery cancelled",
-      deliveryId: args.deliveryId,
-      result,
-    }
-  },
-})
+//
+// A cancelled delivery cannot be restored, so the tool is only offered when the user opts in
+// with PICNIC_ENABLE_CANCEL_DELIVERY=true. (Placing orders is not offered at all.)
+if (config.PICNIC_ENABLE_CANCEL_DELIVERY) {
+  toolRegistry.register({
+    name: "picnic_cancel_delivery",
+    description:
+      "Cancel a delivery order. This cannot be undone: only call it when the user explicitly " +
+      "asks to cancel that delivery.",
+    inputSchema: deliveryInputSchema,
+    // Never retry blindly: the cancellation may already have gone through.
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    handler: async (args) => {
+      await ensureClientInitialized()
+      const client = getPicnicClient()
+      const result = await client.delivery.cancelDelivery(args.deliveryId)
+      return {
+        message: "Delivery cancelled",
+        deliveryId: args.deliveryId,
+        result,
+      }
+    },
+  })
+}
 
 // Rate delivery tool
 const rateDeliveryInputSchema = z.object({

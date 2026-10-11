@@ -164,14 +164,7 @@ describe("picnic cart tools", () => {
       }
     })
 
-    it("marks cancelling a delivery as destructive and not idempotent", async () => {
-      expect((await annotationsByTool()).get("picnic_cancel_delivery")).toMatchObject({
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: false,
-      })
-    })
-
+    // picnic_cancel_delivery is opt-in; its annotations are tested in picnic-delivery-tools.test.ts.
     it("annotates the other delivery and recipe-saving writes by their side effects", async () => {
       const annotations = await annotationsByTool()
 

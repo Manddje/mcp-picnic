@@ -389,6 +389,11 @@ PICNIC_PASSWORD=your-picnic-password
 # Supported values: NL (Netherlands), DE (Germany), FR (France)
 PICNIC_COUNTRY_CODE=NL
 
+# Let the AI cancel deliveries (optional, defaults to false)
+# A cancelled delivery cannot be restored, so picnic_cancel_delivery is only
+# offered when this is set to true
+PICNIC_ENABLE_CANCEL_DELIVERY=false
+
 # HTTP Transport settings (optional)
 ENABLE_HTTP_SERVER=true
 HTTP_PORT=3000
@@ -605,7 +610,7 @@ The server provides comprehensive access to Picnic's functionality through 30+ s
 - **`picnic_get_delivery`** - Get detailed information about a specific delivery
 - **`picnic_get_delivery_position`** - Track real-time driver location and ETA
 - **`picnic_get_delivery_scenario`** - Get driver and route information
-- **`picnic_cancel_delivery`** - Cancel a scheduled delivery
+- **`picnic_cancel_delivery`** - Cancel a scheduled delivery (only offered with `PICNIC_ENABLE_CANCEL_DELIVERY=true`)
 - **`picnic_rate_delivery`** - Rate completed deliveries (0-10 scale)
 - **`picnic_send_delivery_invoice_email`** - Send/resend delivery invoice emails
 - **`picnic_get_order_status`** - Check status of specific orders
