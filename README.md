@@ -553,7 +553,7 @@ The server provides comprehensive access to Picnic's functionality through 30+ s
 
 - **`picnic_search`** - Search for products by name or keywords
 - **`picnic_search_many`** - Search for up to 25 products in one call, e.g. a weekly menu's ingredients
-- **`picnic_get_promotions`** - Get current weekly promotions/deals with prices and labels
+- **`picnic_get_promotions`** - Get current weekly promotions/deals with prices, labels and discount percentages; filter by text and sort by discount
 - **`picnic_get_suggestions`** - Get product suggestions based on query
 - **`picnic_get_product_details`** - Get detailed information about a specific product
 - **`picnic_get_image`** - Get product images in various sizes (tiny to extra-large)

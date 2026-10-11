@@ -150,6 +150,7 @@ describe("promotions tools", () => {
         unit: "1 stuk",
         promotion_label: "nu €1.99",
         original_price: 249,
+        discount_percent: 20,
         image_id: "image-s100",
         max_count: 12,
       },
@@ -221,6 +222,115 @@ describe("promotions tools", () => {
       returned: 1,
       total: 3,
       hasMore: true,
+    })
+  })
+
+  describe("filtering and sorting", () => {
+    function promotionsPage() {
+      return {
+        layout: {
+          body: [
+            promoTile({
+              productId: "s100",
+              promotionId: "promo-1",
+              name: "Kipfilet",
+              label: "nu €4.99",
+              price: 499,
+              originalPrice: 599,
+            }),
+            promoTile({
+              productId: "s200",
+              promotionId: "promo-2",
+              name: "Crème fraîche",
+              label: "1+1 gratis",
+              price: 129,
+            }),
+            promoTile({
+              productId: "s300",
+              promotionId: "promo-3",
+              name: "Kippendijen",
+              label: "nu €3.49",
+              price: 349,
+              originalPrice: 699,
+            }),
+            promoTile({
+              productId: "s400",
+              promotionId: "promo-4",
+              name: "Bonus pasta",
+              label: "1+1 gratis",
+              price: 239,
+            }),
+          ],
+        },
+      }
+    }
+
+    function productIds(payload: { promotions: Array<{ product_id: string }> }) {
+      return payload.promotions.map((promotion) => promotion.product_id)
+    }
+
+    it("filters on name and promotion label, ignoring case and accents", async () => {
+      mocks.sendRequest.mockResolvedValue(promotionsPage())
+
+      const toolRegistry = await loadTools()
+      const byName = parseToolResult(
+        await toolRegistry.executeTool("picnic_get_promotions", { query: "KIP" }),
+      )
+      const byAccentlessName = parseToolResult(
+        await toolRegistry.executeTool("picnic_get_promotions", { query: "creme" }),
+      )
+      const byLabel = parseToolResult(
+        await toolRegistry.executeTool("picnic_get_promotions", { query: "1+1" }),
+      )
+
+      expect(productIds(byName)).toEqual(["s100", "s300"])
+      expect(productIds(byAccentlessName)).toEqual(["s200"])
+      expect(productIds(byLabel)).toEqual(["s200", "s400"])
+    })
+
+    it("sorts by discount, highest first, with promotions without a discount last", async () => {
+      mocks.sendRequest.mockResolvedValue(promotionsPage())
+
+      const toolRegistry = await loadTools()
+      const payload = parseToolResult(
+        await toolRegistry.executeTool("picnic_get_promotions", { sort: "discount" }),
+      )
+
+      expect(
+        payload.promotions.map(({ product_id, discount_percent }: Record<string, unknown>) => [
+          product_id,
+          discount_percent,
+        ]),
+      ).toEqual([
+        ["s300", 50],
+        ["s100", 17],
+        ["s200", undefined],
+        ["s400", undefined],
+      ])
+    })
+
+    // Paginating first would make total count promotions the caller never asked for, and
+    // could hide matches on pages the caller would not think to fetch.
+    it("filters and sorts before paginating, so total counts only the matches", async () => {
+      mocks.sendRequest.mockResolvedValue(promotionsPage())
+
+      const toolRegistry = await loadTools()
+      const payload = parseToolResult(
+        await toolRegistry.executeTool("picnic_get_promotions", {
+          query: "kip",
+          sort: "discount",
+          limit: 1,
+        }),
+      )
+
+      expect(productIds(payload)).toEqual(["s300"])
+      expect(payload.pagination).toEqual({
+        offset: 0,
+        limit: 1,
+        returned: 1,
+        total: 2,
+        hasMore: true,
+      })
     })
   })
 })

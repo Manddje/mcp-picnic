@@ -145,6 +145,7 @@ interface PicnicPromotionProduct {
   unit?: string
   promotion_label?: string
   original_price?: number
+  discount_percent?: number
   image_id?: string
   max_count?: number
 }
@@ -189,6 +190,12 @@ function toPromotionProduct(tile: UnknownRecord): PicnicPromotionProduct | null 
         : null
   if (price === null) return null
 
+  const originalPrice =
+    typeof promotion.strikethrough_price === "number" &&
+    promotion.show_strikethrough_price !== false
+      ? promotion.strikethrough_price
+      : undefined
+
   return {
     product_id: sellingUnit.id,
     promotion_id: promotion.promotion_id,
@@ -198,9 +205,12 @@ function toPromotionProduct(tile: UnknownRecord): PicnicPromotionProduct | null 
     ...(typeof promotion.promotion_label === "string" && {
       promotion_label: promotion.promotion_label,
     }),
-    ...(typeof promotion.strikethrough_price === "number" &&
-      promotion.show_strikethrough_price !== false && {
-        original_price: promotion.strikethrough_price,
+    ...(originalPrice !== undefined && { original_price: originalPrice }),
+    // Lets callers rank deals. Only computable when Picnic shows the old price, which it does
+    // not for deals such as "1+1 gratis".
+    ...(originalPrice !== undefined &&
+      originalPrice > 0 && {
+        discount_percent: Math.round((1 - price / originalPrice) * 100),
       }),
     ...(typeof sellingUnit.image_id === "string" && { image_id: sellingUnit.image_id }),
     ...(typeof sellingUnit.max_count === "number" && { max_count: sellingUnit.max_count }),
@@ -233,6 +243,41 @@ function extractPromotionsFromPage(page: unknown): PicnicPromotionProduct[] {
 
   visit(page)
   return promotions
+}
+
+/** Lowercases text and strips its accents, so "Crème" matches "creme". */
+function normalizeText(text: string): string {
+  return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
+}
+
+/** Orders promotions by discount, highest first; promotions without a known discount go last. */
+function compareDiscountDescending(a: PicnicPromotionProduct, b: PicnicPromotionProduct): number {
+  if (a.discount_percent === undefined) return b.discount_percent === undefined ? 0 : 1
+  if (b.discount_percent === undefined) return -1
+  return b.discount_percent - a.discount_percent
+}
+
+/**
+ * Applies picnic_get_promotions' query filter and sort order. Runs before pagination, so
+ * offset, limit and total all refer to the filtered list.
+ */
+function selectPromotions(
+  promotions: PicnicPromotionProduct[],
+  query: string | undefined,
+  sort: "page" | "discount",
+): PicnicPromotionProduct[] {
+  const needle = query === undefined ? undefined : normalizeText(query)
+  const selected =
+    needle === undefined
+      ? [...promotions]
+      : promotions.filter((promotion) =>
+          [promotion.name, promotion.promotion_label].some(
+            (text) => text !== undefined && normalizeText(text).includes(needle),
+          ),
+        )
+  // Array.prototype.sort is stable, so promotions with equal discounts keep the app's order.
+  if (sort === "discount") selected.sort(compareDiscountDescending)
+  return selected
 }
 
 // How many Picnic requests a batch tool keeps in flight at once: enough to get through a batch
@@ -389,14 +434,32 @@ const promotionsInputSchema = z.object({
     .min(0)
     .default(0)
     .describe("Number of promotions to skip for pagination (default: 0)"),
+  query: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe(
+      "Only return promotions whose name or promotion label contains this text, ignoring case " +
+        "and accents, e.g. 'kip' or '1+1'.",
+    ),
+  sort: z
+    .enum(["page", "discount"])
+    .default("page")
+    .describe(
+      "'page' keeps the app's order (default). 'discount' puts the highest discount_percent " +
+        "first; promotions without one, such as '1+1 gratis', come last.",
+    ),
 })
 
 toolRegistry.register({
   name: "picnic_get_promotions",
   description:
     "Get Picnic's current weekly promotions/deals from the app's 'Alle acties' page. " +
-    "Returns promoted products with current price, promotion label, original price when shown, " +
-    "and pagination.",
+    "Returns promoted products with current price, promotion label, original price and " +
+    "discount_percent when Picnic shows the old price, and pagination. Filter with query and " +
+    "sort by discount to find relevant deals without paging through all of them; total then " +
+    "counts the matching promotions only.",
   inputSchema: promotionsInputSchema,
   handler: async (args) => {
     await ensureClientInitialized()
@@ -407,11 +470,15 @@ toolRegistry.register({
       null,
       true,
     )
-    const allPromotions = extractPromotionsFromPage(page)
+    const matching = selectPromotions(
+      extractPromotionsFromPage(page),
+      args.query,
+      args.sort ?? "page",
+    )
 
     const startIndex = args.offset ?? 0
     const limit = args.limit ?? 25
-    const promotions = allPromotions.slice(startIndex, startIndex + limit)
+    const promotions = matching.slice(startIndex, startIndex + limit)
 
     return {
       source: {
@@ -423,8 +490,8 @@ toolRegistry.register({
         offset: startIndex,
         limit,
         returned: promotions.length,
-        total: allPromotions.length,
-        hasMore: startIndex + limit < allPromotions.length,
+        total: matching.length,
+        hasMore: startIndex + limit < matching.length,
       },
     }
   },

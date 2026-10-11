@@ -55,8 +55,10 @@ Get Picnic's current weekly promotions/deals from the app's "Alle acties" page.
 
 - `limit` (number, optional): Maximum number of promotions to return (1-100, default: 25)
 - `offset` (number, optional): Number of promotions to skip for pagination (default: 0)
+- `query` (string, optional): Only return promotions whose name or promotion label contains this text, ignoring case and accents (e.g. `"kip"` or `"1+1"`)
+- `sort` (string, optional): `"page"` keeps the app's order (default); `"discount"` puts the highest `discount_percent` first, with promotions that have none (such as "1+1 gratis") last
 
-**Returns:** Promoted products with product ID, promotion ID, name, current price, unit, promotion label, original price when shown, image ID, and pagination metadata.
+**Returns:** Promoted products with product ID, promotion ID, name, current price, unit, promotion label, original price and `discount_percent` when Picnic shows the old price, image ID, and pagination metadata. Filtering and sorting happen before pagination, so `total` counts the matching promotions only.
 
 #### `picnic_get_suggestions`
 
