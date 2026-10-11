@@ -580,7 +580,7 @@ The server provides comprehensive access to Picnic's functionality through 30+ s
 ### Own Recipes
 
 - **`picnic_get_own_recipe`** - Get an own recipe with its ingredients, portions and note
-- **`picnic_create_recipe`** - Create an own recipe from Picnic products, with an optional note
+- **`picnic_create_recipe`** - Create an own recipe from Picnic products, with an optional note and suggested image
 - **`picnic_rename_recipe`** - Rename an own recipe
 - **`picnic_update_recipe_portions`** - Change the default number of portions
 - **`picnic_delete_recipe`** - Permanently delete an own recipe

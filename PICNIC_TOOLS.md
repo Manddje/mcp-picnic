@@ -375,6 +375,9 @@ Create a new own recipe. Not idempotent: every call creates another recipe.
 - `ingredients` (array): Products as `{ "product_id": "s1001524", "quantity": 1 }`; repeated products are merged
 - `portions` (number, optional): Number of portions the quantities are for (default: 4)
 - `note` (string, optional): Free-text note, max 5000 characters; each line becomes a paragraph
+- `image` (string, optional): `"auto"` gives the new recipe Picnic's first suggested image, saving the `picnic_get_recipe_image_suggestions` and `picnic_set_recipe_image` calls
+
+A note or image that fails to save does not fail the call, because the recipe already exists and a retry would create a duplicate. The result reports `noteSet` / `imageSet` as `false` with an error hint instead; fix it with `picnic_set_recipe_note` or `picnic_set_recipe_image`.
 
 #### `picnic_rename_recipe`
 

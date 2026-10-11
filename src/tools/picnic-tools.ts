@@ -1332,13 +1332,67 @@ toolRegistry.register({
   },
 })
 
+/** Sets the note of a just-created recipe, returning the outcome instead of throwing. */
+async function setNewRecipeNote(
+  client: ReturnType<typeof getPicnicClient>,
+  recipeId: string,
+  note: string,
+) {
+  try {
+    await client.recipe.setUserDefinedRecipeNote(recipeId, noteToHtml(note))
+    return { noteSet: true }
+  } catch (error) {
+    return {
+      noteSet: false,
+      noteError: `${getErrorMessage(error)}. Set it with picnic_set_recipe_note.`,
+    }
+  }
+}
+
+/**
+ * Gives a just-created recipe Picnic's first suggested image, returning the outcome instead of
+ * throwing. The suggestion is sent along with its reference image, as picnic_set_recipe_image
+ * does.
+ */
+async function selectFirstSuggestedImage(
+  client: ReturnType<typeof getPicnicClient>,
+  recipeId: string,
+) {
+  try {
+    // The suggestions come from a page about the recipe, which Picnic can briefly fail to
+    // render right after the recipe was created or its note set; readRecipe retries that.
+    const [suggestion] = await readRecipe(() =>
+      client.recipe.getUserDefinedRecipeSuggestedImages(recipeId),
+    )
+    if (!suggestion) {
+      return {
+        imageSet: false,
+        imageError:
+          "Picnic suggested no images for this recipe. Upload one with picnic_set_recipe_image.",
+      }
+    }
+    await client.recipe.selectUserDefinedRecipeImage(
+      recipeId,
+      suggestion.id,
+      suggestion.referenceImage,
+    )
+    return { imageSet: true, imageId: suggestion.id }
+  } catch (error) {
+    return {
+      imageSet: false,
+      imageError: `${getErrorMessage(error)}. Set it with picnic_set_recipe_image.`,
+    }
+  }
+}
+
 toolRegistry.register({
   name: "picnic_create_recipe",
   description:
     "Create a new own recipe in the user's Picnic cookbook ('Eigen recepten') from Picnic " +
     "products. Look up product IDs with picnic_search first; put steps and anything Picnic does " +
-    "not sell in the note. Not idempotent: every call creates another recipe. The returned " +
-    "recipeId works with every recipe tool, e.g. picnic_add_recipe_to_cart.",
+    "not sell in the note. Pass image 'auto' to also give it Picnic's first suggested image. " +
+    "Not idempotent: every call creates another recipe. The returned recipeId works with every " +
+    "recipe tool, e.g. picnic_add_recipe_to_cart.",
   inputSchema: z.object({
     name: recipeNameSchema,
     ingredients: z
@@ -1360,6 +1414,13 @@ toolRegistry.register({
       .default(4)
       .describe("Number of portions the quantities are for (default 4)."),
     note: recipeNoteSchema.optional(),
+    image: z
+      .enum(["auto"])
+      .optional()
+      .describe(
+        "'auto' selects Picnic's first suggested image right after creating the recipe, " +
+          "saving the picnic_get_recipe_image_suggestions and picnic_set_recipe_image calls.",
+      ),
   }),
   annotations: RECIPE_CREATE_ANNOTATIONS,
   handler: async (args) => {
@@ -1385,20 +1446,14 @@ toolRegistry.register({
       name: args.name,
       portions,
     }
-    if (args.note === undefined) return created
 
-    // The recipe exists at this point, so report a failed note instead of failing the call;
-    // a retry of the whole tool would create a duplicate recipe.
-    try {
-      await client.recipe.setUserDefinedRecipeNote(sellingGroupId, noteToHtml(args.note))
-      return { ...created, noteSet: true }
-    } catch (error) {
-      return {
-        ...created,
-        noteSet: false,
-        noteError: `${getErrorMessage(error)}. Set it with picnic_set_recipe_note.`,
-      }
-    }
+    // The recipe exists at this point, so report a failed note or image instead of failing the
+    // call; a retry of the whole tool would create a duplicate recipe.
+    const note =
+      args.note === undefined ? {} : await setNewRecipeNote(client, sellingGroupId, args.note)
+    const image =
+      args.image === "auto" ? await selectFirstSuggestedImage(client, sellingGroupId) : {}
+    return { ...created, ...note, ...image }
   },
 })
 
