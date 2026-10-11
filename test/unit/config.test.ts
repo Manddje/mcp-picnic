@@ -191,7 +191,12 @@ describe("Config Schema - PICNIC_COUNTRY_CODE (Issue #10 regression)", () => {
 })
 
 describe("Config Schema - HTTP transport settings", () => {
-  const HTTP_SETTINGS = ["HTTP_ALLOWED_ORIGINS"]
+  const HTTP_SETTINGS = [
+    "HTTP_ALLOWED_ORIGINS",
+    "HTTP_RATE_LIMIT_WINDOW_MS",
+    "HTTP_RATE_LIMIT_MAX_REQUESTS",
+    "HTTP_REQUEST_TIMEOUT_MS",
+  ]
 
   async function loadConfig(env: Record<string, string> = {}) {
     vi.resetModules()
@@ -221,5 +226,34 @@ describe("Config Schema - HTTP transport settings", () => {
       "https://app.example.com",
       "http://192.168.1.20:8080",
     ])
+  })
+
+  it("keeps the previous limits when nothing is configured", async () => {
+    const config = await loadConfig()
+
+    expect(config.HTTP_RATE_LIMIT_WINDOW_MS).toBe(15 * 60 * 1000)
+    expect(config.HTTP_RATE_LIMIT_MAX_REQUESTS).toBe(100)
+    expect(config.HTTP_REQUEST_TIMEOUT_MS).toBe(10000)
+  })
+
+  it("reads the limits from the environment", async () => {
+    const config = await loadConfig({
+      HTTP_RATE_LIMIT_WINDOW_MS: "60000",
+      HTTP_RATE_LIMIT_MAX_REQUESTS: "1000",
+      HTTP_REQUEST_TIMEOUT_MS: "30000",
+    })
+
+    expect(config.HTTP_RATE_LIMIT_WINDOW_MS).toBe(60000)
+    expect(config.HTTP_RATE_LIMIT_MAX_REQUESTS).toBe(1000)
+    expect(config.HTTP_REQUEST_TIMEOUT_MS).toBe(30000)
+  })
+
+  it.each([
+    ["HTTP_REQUEST_TIMEOUT_MS", "abc"],
+    ["HTTP_REQUEST_TIMEOUT_MS", "0"],
+    ["HTTP_RATE_LIMIT_MAX_REQUESTS", "-5"],
+    ["HTTP_RATE_LIMIT_WINDOW_MS", "1.5"],
+  ])("rejects %s=%s", async (name, value) => {
+    await expect(loadConfig({ [name]: value })).rejects.toThrow(name)
   })
 })

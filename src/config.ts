@@ -8,6 +8,9 @@ dotenv.config()
 const defaultSessionFile = path.join(os.homedir(), ".picnic-session.json")
 const defaultDeviceFile = path.join(os.homedir(), ".picnic-device.json")
 
+// Rejects zero, negative and non-numeric values instead of letting them through as NaN.
+const positiveInteger = (fallback: number) => z.coerce.number().int().positive().default(fallback)
+
 const configSchema = z.object({
   PICNIC_USERNAME: z.string(),
   PICNIC_PASSWORD: z.string(),
@@ -37,6 +40,9 @@ const configSchema = z.object({
         .map((origin) => origin.trim())
         .filter(Boolean),
     ),
+  HTTP_RATE_LIMIT_WINDOW_MS: positiveInteger(15 * 60 * 1000),
+  HTTP_RATE_LIMIT_MAX_REQUESTS: positiveInteger(100),
+  HTTP_REQUEST_TIMEOUT_MS: positiveInteger(10000),
   PICNIC_SESSION_FILE: z.string().default(defaultSessionFile),
 })
 

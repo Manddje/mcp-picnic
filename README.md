@@ -401,6 +401,11 @@ HTTP_AUTH_TOKEN=replace-with-a-long-random-token
 HTTP_AUTH_HEADER_NAME=x-mcp-token
 # Optional: comma-separated browser origins to allow besides localhost pages ("*" allows any)
 HTTP_ALLOWED_ORIGINS=https://app.example.com
+# Optional: rate limit per client IP (default: 100 requests per 15 minutes)
+HTTP_RATE_LIMIT_WINDOW_MS=900000
+HTTP_RATE_LIMIT_MAX_REQUESTS=100
+# Optional: request timeout in milliseconds (default: 10000)
+HTTP_REQUEST_TIMEOUT_MS=10000
 
 # Session persistence (optional, strongly recommended in containers)
 PICNIC_SESSION_FILE=~/.picnic-session.json
@@ -461,6 +466,8 @@ The HTTP server listens only on `HTTP_HOST`, which defaults to `localhost`.
 - **Bound to `localhost`, `127.0.0.1` or `::1`**: only requests whose `Host` header names one of those addresses are accepted. This blocks DNS rebinding, where a website points its own domain at `127.0.0.1` to reach your local server through your browser. `HTTP_AUTH_TOKEN` is optional here.
 - **Bound to any other address** (such as `0.0.0.0` in Docker): the server refuses to start without `HTTP_AUTH_TOKEN`, because anyone who can reach that address could otherwise use your Picnic account.
 - **Browsers**: requests that carry an `Origin` header are only accepted from pages on `localhost`, `127.0.0.1` or `[::1]` (any port) and from the origins in `HTTP_ALLOWED_ORIGINS`; anything else gets `403 Forbidden`. Those origins can read the `Mcp-Session-Id` response header. Clients that don't run in a browser (curl, Node-based MCP clients) send no `Origin` and are unaffected.
+- **Rate limiting**: requests are limited per client IP, by default to 100 per 15 minutes. Local clients all share one IP, so raise `HTTP_RATE_LIMIT_MAX_REQUESTS` (or adjust `HTTP_RATE_LIMIT_WINDOW_MS`) for heavy use.
+- **Timeouts**: a request that hasn't started its response within `HTTP_REQUEST_TIMEOUT_MS` (default 10 seconds) gets `408 Request Timeout`.
 
 ### MCP Client Configuration
 
