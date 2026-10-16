@@ -2195,14 +2195,17 @@ toolRegistry.register({
 // Get delivery slots tool
 toolRegistry.register({
   name: "picnic_get_delivery_slots",
-  description: "Get available delivery time slots",
+  description:
+    "Get the delivery time slots: per slot its slotId, window, cut-off time, availability, " +
+    "minimum order value (in cents) and isGreenChoice, the longer of two slots that start at the " +
+    "same time, which Picnic offers as the green choice. Also returns the selected slot and " +
+    "whether the user picked it (isExplicitSelection) or Picnic preselected it.",
   inputSchema: z.object({}),
   annotations: READ_ONLY_ANNOTATIONS,
   handler: async () => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const slots = await client.cart.getDeliverySlots()
-    return slots
+    return await client.cart.getDeliverySlotOverview()
   },
 })
 

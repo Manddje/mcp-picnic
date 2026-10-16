@@ -29,7 +29,7 @@ Focus on testing behavior, not implementation details. Tool tests mock `src/util
 
 ## Context
 
-mcp-picnic is an MCP server that lets an LLM use the Picnic online supermarket (NL, DE and FR) through the unofficial [picnic-api](https://github.com/MRVDH/picnic-api) package (4.10): search products and promotions, browse recipes and manage the user's own recipes, plan meals, fill the cart, pick a delivery slot and follow deliveries.
+mcp-picnic is an MCP server that lets an LLM use the Picnic online supermarket (NL, DE and FR) through the unofficial [picnic-api](https://github.com/MRVDH/picnic-api) package (4.11): search products and promotions, browse recipes and manage the user's own recipes, plan meals, fill the cart, pick a delivery slot and follow deliveries.
 
 ### Layout
 
