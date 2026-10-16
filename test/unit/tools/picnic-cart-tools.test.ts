@@ -1,3 +1,4 @@
+import { extractDeliverySlots } from "picnic-api/lib/domains/cart/helpers.js"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { ToolResult } from "../../../src/tools/registry.js"
 
@@ -7,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   removeProductFromCart: vi.fn(),
   clearCart: vi.fn(),
   getCart: vi.fn(),
+  getDeliverySlots: vi.fn(),
   getDeliveries: vi.fn(),
   initializePicnicClient: vi.fn(),
 }))
@@ -19,6 +21,8 @@ vi.mock("../../../src/utils/picnic-client.js", () => ({
       removeProductFromCart: mocks.removeProductFromCart,
       clearCart: mocks.clearCart,
       getCart: mocks.getCart,
+      // The real overview helper, so the tool output follows picnic-api's mapping.
+      getDeliverySlotOverview: async () => extractDeliverySlots(await mocks.getDeliverySlots()),
     },
     delivery: { getDeliveries: mocks.getDeliveries },
     sendRequest: vi.fn(),
@@ -501,6 +505,63 @@ describe("picnic_get_overview", () => {
 
     expect(list.find((tool) => tool.name === "picnic_get_overview")?.annotations).toMatchObject({
       readOnlyHint: true,
+    })
+  })
+})
+
+describe("picnic_get_delivery_slots", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    await import("../../../src/tools/picnic-tools.js")
+  })
+
+  function slot(id: string, windowStart: string, windowEnd: string) {
+    return {
+      slot_id: id,
+      hub_id: "hub",
+      fc_id: "fc",
+      window_start: windowStart,
+      window_end: windowEnd,
+      cut_off_time: "2026-10-16T22:00:00.000+02:00",
+      is_available: true,
+      selected: id === "slot-60",
+      reserved: false,
+      minimum_order_value: 3500,
+      slot_characteristics: [],
+    }
+  }
+
+  it("flags the longer of two slots with the same start as the green choice", async () => {
+    const { toolRegistry } = await import("../../../src/tools/registry.js")
+    mocks.getDeliverySlots.mockResolvedValueOnce({
+      delivery_slots: [
+        slot("slot-60", "2026-10-17T17:00:00.000+02:00", "2026-10-17T18:00:00.000+02:00"),
+        slot("slot-120", "2026-10-17T17:00:00.000+02:00", "2026-10-17T19:00:00.000+02:00"),
+        slot("slot-late", "2026-10-17T20:00:00.000+02:00", "2026-10-17T21:00:00.000+02:00"),
+      ],
+      slot_selector_message: {},
+      selected_slot: { slot_id: "slot-60", state: "IMPLICIT" },
+    })
+
+    const result = parseToolResult(await toolRegistry.executeTool("picnic_get_delivery_slots", {}))
+
+    expect(
+      result.slots.map((s: { slotId: string; isGreenChoice: boolean }) => [
+        s.slotId,
+        s.isGreenChoice,
+      ]),
+    ).toEqual([
+      ["slot-60", false],
+      ["slot-120", true],
+      ["slot-late", false],
+    ])
+    expect(result.slots[0]).toMatchObject({ isSelected: true, minimumOrderValue: 3500 })
+    expect(result.selectedSlot).toEqual({
+      slotId: "slot-60",
+      state: "IMPLICIT",
+      windowStart: "2026-10-17T17:00:00.000+02:00",
+      windowEnd: "2026-10-17T18:00:00.000+02:00",
+      isExplicitSelection: false,
     })
   })
 })

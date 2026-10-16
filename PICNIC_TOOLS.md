@@ -161,7 +161,7 @@ Clear all items from the shopping cart.
 
 #### `picnic_get_delivery_slots`
 
-Get available delivery time slots.
+Get the delivery time slots. Each slot has its `slotId`, window, cut-off time, availability, minimum order value (in cents) and `isGreenChoice`: when two slots start at the same time, the longer one is Picnic's green choice. The result also contains the selected slot, with `isExplicitSelection` false when Picnic preselected it.
 
 #### `picnic_set_delivery_slot`
 
