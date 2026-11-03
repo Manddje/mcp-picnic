@@ -421,9 +421,11 @@ PICNIC_API_VERSION=15
 # Device identity sent to the Picnic API (optional)
 # Defaults are provided by the picnic-api library; override these only if
 # Picnic starts rejecting requests (e.g. 2FA codes not arriving) before the
-# library ships updated defaults.
+# library ships updated defaults. Which pages Picnic serves as RSC depends on
+# the agent's app version, so an agent older than the library's default can
+# break search and other page-based tools; leave PICNIC_AGENT unset if unsure.
 PICNIC_DEVICE_ID=3C417201548B2E3B
-PICNIC_AGENT="30100;1.228.1-15480;"
+# PICNIC_AGENT="30100;1.251.0-15611;"
 ```
 
 #### Country Configuration

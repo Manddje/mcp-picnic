@@ -1,13 +1,19 @@
+import { extractDeliverySummaries } from "picnic-api/lib/domains/delivery/summaries.js"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { ToolResult } from "../../../src/tools/registry.js"
 
 const mocks = vi.hoisted(() => ({
   cancelDelivery: vi.fn(),
+  // Picnic's raw POST /deliveries/summary body, read by picnic-api's real mapping.
+  deliverySummaries: vi.fn(),
 }))
 
 vi.mock("../../../src/utils/picnic-client.js", () => ({
   getPicnicClient: () => ({
-    delivery: { cancelDelivery: mocks.cancelDelivery },
+    delivery: {
+      cancelDelivery: mocks.cancelDelivery,
+      getDeliverySummaries: async () => extractDeliverySummaries(await mocks.deliverySummaries()),
+    },
   }),
   initializePicnicClient: vi.fn(),
   saveSession: vi.fn(),
@@ -72,5 +78,44 @@ describe("picnic_cancel_delivery", () => {
       message: "Delivery cancelled",
       deliveryId: "d-1",
     })
+  })
+})
+
+describe("picnic_get_deliveries", () => {
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
+  // Picnic's summaries have no item counts, so picnic-api reports 0 items for every delivery,
+  // which a caller would read as an empty delivery.
+  it("leaves out the item count the summaries cannot fill", async () => {
+    mocks.deliverySummaries.mockResolvedValue([
+      {
+        delivery_id: "d-1",
+        creation_time: "2026-10-30T12:38:07.707+01:00",
+        slot: {
+          window_start: "2026-11-01T09:00:00.000+01:00",
+          window_end: "2026-11-01T10:00:00.000+01:00",
+        },
+        status: "COMPLETED",
+        orders: [{ id: "o-1", total_price: 5976 }],
+      },
+    ])
+    const toolRegistry = await loadTools()
+
+    const payload = parseToolResult(await toolRegistry.executeTool("picnic_get_deliveries", {}))
+
+    expect(payload.deliveries).toEqual([
+      {
+        id: "d-1",
+        status: "COMPLETED",
+        creationTime: "2026-10-30T12:38:07.707+01:00",
+        windowStart: "2026-11-01T09:00:00.000+01:00",
+        windowEnd: "2026-11-01T10:00:00.000+01:00",
+        orderCount: 1,
+        totalPrice: 5976,
+      },
+    ])
+    expect(payload.pagination).toMatchObject({ total: 1, hasMore: false })
   })
 })

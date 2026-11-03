@@ -5,14 +5,13 @@ const mocks = vi.hoisted(() => ({
   initializePicnicClient: vi.fn(),
   sendRequest: vi.fn(),
   getPage: vi.fn(),
-  getRscPage: vi.fn(),
   recipe: {
     getRecipe: vi.fn(),
     createUserDefinedRecipe: vi.fn(),
     setUserDefinedRecipeNote: vi.fn(),
     addUserDefinedRecipeIngredient: vi.fn(),
-    updateUserDefinedRecipeIngredient: vi.fn(),
-    assignSellableComponentToDay: vi.fn(),
+    updateRecipeIngredient: vi.fn(),
+    updateRecipeIngredientInCart: vi.fn(),
     getUserDefinedRecipeSuggestedImages: vi.fn(),
     selectUserDefinedRecipeImage: vi.fn(),
     uploadUserDefinedRecipeImage: vi.fn(),
@@ -24,7 +23,7 @@ vi.mock("../../../src/utils/picnic-client.js", () => ({
     url: "https://storefront-prod.nl.picnicinternational.com/api/15",
     sendRequest: mocks.sendRequest,
     recipe: mocks.recipe,
-    app: { getPage: mocks.getPage, getRscPage: mocks.getRscPage },
+    app: { getPage: mocks.getPage },
   }),
   initializePicnicClient: mocks.initializePicnicClient,
   saveSession: vi.fn(),
@@ -93,7 +92,8 @@ describe("own recipe tools", () => {
       await toolRegistry.executeTool("picnic_get_own_recipe", { recipe_url_or_id: OWN_RECIPE }),
     )
 
-    expect(mocks.recipe.getRecipe).toHaveBeenCalledWith(OWN_RECIPE, undefined, {
+    expect(mocks.recipe.getRecipe).toHaveBeenCalledWith(OWN_RECIPE, {
+      portions: undefined,
       resolveIngredientNames: true,
     })
     expect(payload.note).toBe("Kook de pasta.\nRoer & serveer")
@@ -312,20 +312,18 @@ describe("own recipe tools", () => {
       }),
     )
 
-    expect(mocks.recipe.addUserDefinedRecipeIngredient).toHaveBeenCalledWith(
-      OWN_RECIPE,
-      "s300",
-      1,
-      2,
-      2,
-    )
+    expect(mocks.recipe.addUserDefinedRecipeIngredient).toHaveBeenCalledWith(OWN_RECIPE, "s300", {
+      quantity: 1,
+      portions: 2,
+      order: 2,
+    })
     expect(payload.ingredientId).toBe("c3")
   })
 
   describe("picnic_update_recipe_ingredient", () => {
     it("changes only the quantity when no product is given", async () => {
       mocks.recipe.getRecipe.mockResolvedValue(recipeDetails())
-      mocks.recipe.updateUserDefinedRecipeIngredient.mockResolvedValue({})
+      mocks.recipe.updateRecipeIngredient.mockResolvedValue({})
 
       const toolRegistry = await loadTools()
       const payload = parseToolResult(
@@ -336,14 +334,12 @@ describe("own recipe tools", () => {
         }),
       )
 
-      expect(mocks.recipe.updateUserDefinedRecipeIngredient).toHaveBeenCalledWith(
-        OWN_RECIPE,
-        "c1",
-        { s100: 3 },
-        2,
-        undefined,
-      )
-      expect(mocks.recipe.assignSellableComponentToDay).not.toHaveBeenCalled()
+      expect(mocks.recipe.updateRecipeIngredient).toHaveBeenCalledWith(OWN_RECIPE, "c1", {
+        quantities: { s100: 3 },
+        portions: 2,
+        swapType: undefined,
+      })
+      expect(mocks.recipe.updateRecipeIngredientInCart).not.toHaveBeenCalled()
       expect(payload.cartUpdated).toBe(false)
     })
 
@@ -351,7 +347,7 @@ describe("own recipe tools", () => {
     // lacks the ingredient altogether.
     it("swaps the product and pushes the new selection to the cart when asked to", async () => {
       mocks.recipe.getRecipe.mockResolvedValue(recipeDetails())
-      mocks.recipe.updateUserDefinedRecipeIngredient.mockResolvedValue({ shouldUpdateCart: true })
+      mocks.recipe.updateRecipeIngredient.mockResolvedValue({ shouldUpdateCart: true })
 
       const toolRegistry = await loadTools()
       const payload = parseToolResult(
@@ -365,20 +361,16 @@ describe("own recipe tools", () => {
 
       // Picnic fails to render the edit when a single-product ingredient's old product is
       // sent with quantity 0, so only the new selection goes out.
-      expect(mocks.recipe.updateUserDefinedRecipeIngredient).toHaveBeenCalledWith(
-        OWN_RECIPE,
-        "c1",
-        { s999: 1 },
-        2,
-        "SEARCH_SELECTION",
-      )
-      expect(mocks.recipe.assignSellableComponentToDay).toHaveBeenCalledWith(
-        OWN_RECIPE,
-        "c1",
-        { s999: 1 },
-        2,
-        "SEARCH_SELECTION",
-      )
+      expect(mocks.recipe.updateRecipeIngredient).toHaveBeenCalledWith(OWN_RECIPE, "c1", {
+        quantities: { s999: 1 },
+        portions: 2,
+        swapType: "SEARCH_SELECTION",
+      })
+      expect(mocks.recipe.updateRecipeIngredientInCart).toHaveBeenCalledWith(OWN_RECIPE, "c1", {
+        quantities: { s999: 1 },
+        portions: 2,
+        swapType: "SEARCH_SELECTION",
+      })
       expect(payload.cartUpdated).toBe(true)
     })
 
@@ -386,7 +378,7 @@ describe("own recipe tools", () => {
       const details = recipeDetails()
       details.ingredients.push({ ...details.ingredients[0], sellingUnitId: "s101", quantity: 1 })
       mocks.recipe.getRecipe.mockResolvedValue(details)
-      mocks.recipe.updateUserDefinedRecipeIngredient.mockResolvedValue({})
+      mocks.recipe.updateRecipeIngredient.mockResolvedValue({})
 
       const toolRegistry = await loadTools()
       await toolRegistry.executeTool("picnic_update_recipe_ingredient", {
@@ -396,13 +388,11 @@ describe("own recipe tools", () => {
         product_id: "s100",
       })
 
-      expect(mocks.recipe.updateUserDefinedRecipeIngredient).toHaveBeenCalledWith(
-        OWN_RECIPE,
-        "c1",
-        { s100: 2, s101: 0 },
-        2,
-        "WITHIN_SELLING_GROUP_COMPONENT",
-      )
+      expect(mocks.recipe.updateRecipeIngredient).toHaveBeenCalledWith(OWN_RECIPE, "c1", {
+        quantities: { s100: 2, s101: 0 },
+        portions: 2,
+        swapType: "WITHIN_SELLING_GROUP_COMPONENT",
+      })
     })
 
     it("rejects an ingredient id that is not part of the recipe", async () => {
@@ -417,7 +407,7 @@ describe("own recipe tools", () => {
           quantity: 1,
         }),
       ).rejects.toThrow(/picnic_get_own_recipe/)
-      expect(mocks.recipe.updateUserDefinedRecipeIngredient).not.toHaveBeenCalled()
+      expect(mocks.recipe.updateRecipeIngredient).not.toHaveBeenCalled()
     })
   })
 
@@ -584,7 +574,7 @@ describe("recipe cart and detail options", () => {
       "GET",
       `/pages/selling-group-details-page?selling_group_id=${OWN_RECIPE}&portions=6`,
       null,
-      true,
+      { includePicnicHeaders: true },
     )
   })
 })
@@ -594,25 +584,24 @@ describe("picnic_get_page", () => {
     vi.clearAllMocks()
   })
 
-  it("falls back to the RSC route when Picnic serves the page in that format", async () => {
+  it("returns the components of a page Picnic serves as RSC", async () => {
     const toolRegistry = await loadTools()
-    const { default: PicnicClient } = await import("picnic-api")
-    mocks.getPage.mockRejectedValue(
-      new PicnicClient.UnexpectedPageFormatError("profile-root", "rsc"),
-    )
-    mocks.getRscPage.mockResolvedValue({ rows: { "0": ["$", "div", null, {}] }, modules: {} })
+    mocks.getPage.mockResolvedValue({
+      format: "rsc",
+      content: { pageId: "profile-root", nodes: [{ type: "div", props: {}, children: [] }] },
+    })
 
     const payload = parseToolResult(
       await toolRegistry.executeTool("picnic_get_page", { page_id: "profile-root" }),
     )
 
-    expect(mocks.getRscPage).toHaveBeenCalledWith("profile-root")
+    expect(mocks.getPage).toHaveBeenCalledWith("profile-root")
     expect(payload.format).toBe("rsc")
-    expect(JSON.parse(payload.content).rows["0"][1]).toBe("div")
+    expect(JSON.parse(payload.content).nodes[0].type).toBe("div")
   })
 
   it("returns large pages in chunks", async () => {
-    mocks.getPage.mockResolvedValue({ body: "x".repeat(5000) })
+    mocks.getPage.mockResolvedValue({ format: "fusion", page: { body: "x".repeat(5000) } })
 
     const toolRegistry = await loadTools()
     const payload = parseToolResult(

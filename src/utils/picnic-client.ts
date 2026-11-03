@@ -20,12 +20,10 @@ let recentRelogin: Promise<void> | null = null
 // after a fresh key was rejected straight away) only piles failed logins onto the account.
 const RELOGIN_COOLDOWN_MS = 30_000
 
-// Bounds the session check, so an unresponsive Picnic API can't eat a tool's time budget.
-const AUTH_PROBE_TIMEOUT_MS = 10_000
-
 type PicnicCountryCode = "NL" | "DE" | "FR"
 type PicnicClientOptions = NonNullable<ConstructorParameters<typeof PicnicClient>[0]> &
   Record<string, unknown>
+type RequestOptions = Parameters<PicnicClientInstance["sendRequest"]>[3]
 
 interface LoginCredentials {
   username: string
@@ -207,7 +205,7 @@ async function login(
 ): Promise<boolean> {
   try {
     const loginResult = await client.auth.login(credentials.username, credentials.password)
-    return Boolean(loginResult?.second_factor_authentication_required)
+    return Boolean(loginResult?.secondFactorAuthenticationRequired)
   } catch (error) {
     // Some 2FA challenges surface as a failed login; the client stays usable for the 2FA tools.
     if (isTwoFactorAuthenticationError(error)) {
@@ -259,52 +257,23 @@ async function relogin(client: PicnicClientInstance, credentials: LoginCredentia
 /**
  * Tells whether a failed request was turned away because its auth key is no longer valid.
  *
- * picnic-api drops the HTTP status from the errors it throws and keeps only Picnic's localized
- * message, so the error alone can't tell an expired session from any other failure. Instead,
- * replay the key on a cheap authenticated read. Only failed requests pay for the extra call, and
- * because the probe carries the key the failed request used, a request that raced a concurrent
- * re-login is still recognized.
+ * picnic-api throws a PicnicApiError carrying the HTTP status and Picnic's error code. Network
+ * failures (TypeError), unparsable bodies (SyntaxError) and its other typed errors say nothing
+ * about the session.
  */
-async function isAuthKeyRejected(
-  client: PicnicClientInstance,
-  error: unknown,
-  authKey: string | null,
-): Promise<boolean> {
-  // picnic-api reports HTTP failures as plain Errors. Network failures (TypeError), unparsable
-  // bodies (SyntaxError) and its typed errors say nothing about the session.
-  if (!(error instanceof Error) || error.name !== "Error") {
+function isAuthKeyRejected(error: unknown): boolean {
+  if (!PicnicClient.isPicnicApiError(error)) {
     return false
   }
-  // Without a key, the request can only have been turned away for lacking one.
-  if (!authKey) {
-    return true
-  }
-
-  try {
-    const response = await fetch(`${client.url}/user`, {
-      headers: { ...client.baseHeaders, "x-picnic-auth": authKey },
-      signal: AbortSignal.timeout(AUTH_PROBE_TIMEOUT_MS),
-    })
-    if (response.ok) {
-      return false
-    }
-    if (response.status === 401) {
-      return true
-    }
-    // Picnic also flags session errors by code (AUTH_ERROR, AUTH_INVALID_CRED) in the body.
-    const body: { error?: { code?: unknown } } | null = await response.json().catch(() => null)
-    const code = body?.error?.code
-    return typeof code === "string" && code.startsWith("AUTH_")
-  } catch {
-    // Picnic unreachable: report the original failure rather than guess.
-    return false
-  }
+  // Picnic also flags session errors by code (AUTH_ERROR, AUTH_INVALID_CRED) on other statuses.
+  return error.status === 401 || Boolean(error.code?.startsWith("AUTH_"))
 }
 
 // The 2FA endpoints are meant to work on a half-authenticated session. Recovering there would
-// start a login that asks for the same second factor all over again.
-function isTwoFactorEndpoint(path: string): boolean {
-  return path.startsWith("/user/2fa/")
+// start a login that asks for the same second factor all over again. A failed login is the
+// re-login's own failure: recovering from it would wait on itself.
+function isAuthEndpoint(path: string): boolean {
+  return path.startsWith("/user/2fa/") || path === "/user/login"
 }
 
 /**
@@ -312,16 +281,16 @@ function isTwoFactorEndpoint(path: string): boolean {
  *
  * The client logs in once at startup, but a long-running server outlives its auth key, after
  * which every tool failed until a restart. All picnic-api services, and the tools that call the
- * client directly, send through the instance's sendRequest, so shadowing it covers every tool
- * without touching their handlers: a request rejected for its auth key triggers one fresh
- * login and is retried once. The retry is safe for mutations too, because Picnic rejected the
- * request rather than applying it.
+ * client directly, send through the instance's sendRequestWithHeaders (sendRequest calls it
+ * too), so shadowing it covers every tool without touching their handlers: a request rejected
+ * for its auth key triggers one fresh login and is retried once. The retry is safe for
+ * mutations too, because Picnic rejected the request rather than applying it.
  */
 function withSessionRecovery(
   client: PicnicClientInstance,
   credentials: LoginCredentials,
 ): PicnicClientInstance {
-  const sendRequest = client.sendRequest.bind(client)
+  const sendRequestWithHeaders = client.sendRequestWithHeaders.bind(client)
 
   // Joins the recent re-login, or starts one unless the key was already replaced after the
   // failed request went out (by 2FA verification, or a re-login that has since been forgotten).
@@ -345,25 +314,16 @@ function withSessionRecovery(
     return attempt
   }
 
-  client.sendRequest = async function <TRequestData, TResponseData>(
+  client.sendRequestWithHeaders = async function <TRequestData, TResponseData>(
     method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     data?: TRequestData | null,
-    includePicnicHeaders?: boolean,
-    isImageRequest?: boolean,
-    contentType?: string,
-  ): Promise<TResponseData> {
+    options?: RequestOptions,
+  ): Promise<{ data: TResponseData; headers: Headers }> {
     const send = () =>
-      sendRequest<TRequestData, TResponseData>(
-        method,
-        path,
-        data,
-        includePicnicHeaders,
-        isImageRequest,
-        contentType,
-      )
+      sendRequestWithHeaders<TRequestData, TResponseData>(method, path, data, options)
 
-    if (isTwoFactorEndpoint(path)) {
+    if (isAuthEndpoint(path)) {
       return send()
     }
     if (twoFactorPending) {
@@ -374,7 +334,7 @@ function withSessionRecovery(
     try {
       return await send()
     } catch (error) {
-      if (!(await isAuthKeyRejected(client, error, authKey))) {
+      if (!isAuthKeyRejected(error)) {
         throw error
       }
       await recoverSession(authKey)

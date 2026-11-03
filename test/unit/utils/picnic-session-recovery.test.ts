@@ -28,7 +28,9 @@ vi.mock("../../../src/config.js", () => ({
 
 const EMPTY_CART = { type: "ORDER", items: [] }
 const USER = { user_id: "user-1" }
-const DELIVERY_SLOTS = { delivery_slots: [] }
+// picnic-api reads its models from the raw responses above.
+const CART = expect.objectContaining({ items: [], totalCount: 0 })
+const DELIVERY_SLOTS = { slots: [], selectedSlot: null }
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
@@ -37,7 +39,7 @@ function jsonResponse(status: number, body: unknown, headers: Record<string, str
   })
 }
 
-// Picnic answers with a localized message; picnic-api keeps only that text and drops the status.
+// Picnic answers with a localized message; picnic-api keeps it along with the status and code.
 const sessionExpired = () =>
   jsonResponse(401, { error: { code: "AUTH_ERROR", message: "Je sessie is verlopen" } })
 
@@ -131,7 +133,6 @@ function createFakePicnic() {
     }
     if (path === "/user") return jsonResponse(200, USER)
     if (path === "/cart") return jsonResponse(200, EMPTY_CART)
-    if (path === "/cart/delivery_slots") return jsonResponse(200, DELIVERY_SLOTS)
     if (path === "/cart/add_product" && method === "POST") {
       picnic.cartAdds++
       return jsonResponse(200, EMPTY_CART)
@@ -170,7 +171,7 @@ describe("picnic-client session recovery", () => {
       const { client } = await startClient()
       picnic.expireSession()
 
-      await expect(client.cart.getCart()).resolves.toEqual(EMPTY_CART)
+      await expect(client.cart.getCart()).resolves.toEqual(CART)
 
       expect(picnic.count("/user/login")).toBe(2)
       expect(picnic.requests.filter((request) => request.path === "/cart")).toEqual([
@@ -190,7 +191,7 @@ describe("picnic-client session recovery", () => {
       const { client } = await startClient()
       picnic.expireSession()
 
-      await expect(client.cart.getCart()).resolves.toEqual(EMPTY_CART)
+      await expect(client.cart.getCart()).resolves.toEqual(CART)
       expect(picnic.count("/user/login")).toBe(1)
     })
 
@@ -208,7 +209,9 @@ describe("picnic-client session recovery", () => {
       const { client } = await startClient()
       picnic.expireSession()
 
-      await expect(client.sendRequest("GET", "/cart", null, true)).resolves.toEqual(EMPTY_CART)
+      await expect(
+        client.sendRequest("GET", "/cart", null, { includePicnicHeaders: true }),
+      ).resolves.toEqual(EMPTY_CART)
       expect(picnic.count("/user/login")).toBe(2)
     })
 
@@ -217,12 +220,8 @@ describe("picnic-client session recovery", () => {
       picnic.expireSession()
 
       await expect(
-        Promise.all([
-          client.cart.getCart(),
-          client.user.getUserDetails(),
-          client.cart.getDeliverySlots(),
-        ]),
-      ).resolves.toEqual([EMPTY_CART, USER, DELIVERY_SLOTS])
+        Promise.all([client.cart.getCart(), client.user.getUser(), client.cart.getDeliverySlots()]),
+      ).resolves.toEqual([CART, USER, DELIVERY_SLOTS])
 
       expect(picnic.count("/user/login")).toBe(2)
     })
@@ -231,12 +230,12 @@ describe("picnic-client session recovery", () => {
       const { client } = await startClient()
       picnic.expireSession()
 
-      const release = picnic.hold("/cart/delivery_slots")
-      const lateRequest = client.cart.getDeliverySlots()
-      await expect(client.cart.getCart()).resolves.toEqual(EMPTY_CART)
+      const release = picnic.hold("/user")
+      const lateRequest = client.user.getUser()
+      await expect(client.cart.getCart()).resolves.toEqual(CART)
       release()
 
-      await expect(lateRequest).resolves.toEqual(DELIVERY_SLOTS)
+      await expect(lateRequest).resolves.toEqual(USER)
       expect(picnic.count("/user/login")).toBe(2)
     })
 
@@ -265,13 +264,11 @@ describe("picnic-client session recovery", () => {
       picnic.loginError = "Ongeldige inloggegevens"
 
       await expect(client.cart.getCart()).rejects.toThrow(
-        "Picnic session expired and logging in again failed: Login failed: Ongeldige inloggegevens",
+        "Picnic session expired and logging in again failed: Ongeldige inloggegevens",
       )
       await expect(client.cart.getCart()).rejects.toThrow("logging in again failed")
 
       expect(picnic.count("/user/login")).toBe(2)
-      // The second request went out without a key, so there was no session left to check.
-      expect(picnic.count("/user")).toBe(1)
     })
 
     it("does not retry a late request once logging in again asked for 2FA", async () => {
@@ -280,15 +277,15 @@ describe("picnic-client session recovery", () => {
       picnic.expireSession()
       picnic.requireSecondFactor = true
 
-      const release = picnic.hold("/cart/delivery_slots")
-      const lateRequest = client.cart.getDeliverySlots()
+      const release = picnic.hold("/user")
+      const lateRequest = client.user.getUser()
       await expect(client.cart.getCart()).rejects.toBeInstanceOf(PicnicTwoFactorRequiredError)
       // Outlast the cooldown, so the late request can't simply reuse that failed re-login.
       vi.advanceTimersByTime(30_000)
       release()
 
       await expect(lateRequest).rejects.toBeInstanceOf(PicnicTwoFactorRequiredError)
-      expect(picnic.count("/cart/delivery_slots")).toBe(1)
+      expect(picnic.count("/user")).toBe(1)
     })
 
     it("logs in again at most once per cooldown while Picnic keeps rejecting new sessions", async () => {
@@ -318,9 +315,9 @@ describe("picnic-client session recovery", () => {
     it("passes the error through without logging in again", async () => {
       const { client } = await startClient()
 
-      await expect(client.sendRequest("GET", "/pages/unknown-page", null, true)).rejects.toThrow(
-        "Pagina niet gevonden",
-      )
+      await expect(
+        client.sendRequest("GET", "/pages/unknown-page", null, { includePicnicHeaders: true }),
+      ).rejects.toThrow("Pagina niet gevonden")
       expect(picnic.count("/user/login")).toBe(1)
     })
 
@@ -371,7 +368,7 @@ describe("picnic-client session recovery", () => {
       await client.auth.generate2FACode("SMS")
       await verifyPicnic2FACode("123456")
 
-      await expect(client.cart.getCart()).resolves.toEqual(EMPTY_CART)
+      await expect(client.cart.getCart()).resolves.toEqual(CART)
     })
   })
 })

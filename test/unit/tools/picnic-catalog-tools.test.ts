@@ -2,14 +2,33 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { ToolResult } from "../../../src/tools/registry.js"
 
 const mocks = vi.hoisted(() => ({
-  search: vi.fn(),
-  getProductDetails: vi.fn(),
+  // The product sections of a search, each a list of product tiles.
+  searchSections: vi.fn(),
+  getProduct: vi.fn(),
   initializePicnicClient: vi.fn(),
 }))
 
 vi.mock("../../../src/utils/picnic-client.js", () => ({
   getPicnicClient: () => ({
-    catalog: { search: mocks.search, getProductDetails: mocks.getProductDetails },
+    catalog: {
+      getSearchResults: async (query: string) => {
+        const sections: unknown[][] = await mocks.searchSections(query)
+        return {
+          query,
+          correctedQuery: null,
+          products: {
+            sections: sections.map((products, index) => ({
+              id: `section-${index}`,
+              type: "VISUAL",
+              title: null,
+              products,
+            })),
+          },
+          recipes: [],
+        }
+      },
+      getProduct: mocks.getProduct,
+    },
     sendRequest: vi.fn(),
   }),
   initializePicnicClient: mocks.initializePicnicClient,
@@ -21,17 +40,28 @@ function parseToolResult(result: ToolResult) {
   return JSON.parse(result.content[0].text ?? "")
 }
 
-function sellingUnit(id: string, name: string) {
+function productTile(id: string, name: string) {
   return {
     id,
     name,
-    image_id: `image-${id}`,
-    display_price: 199,
-    unit_quantity: "500 gram",
-    max_count: 50,
-    decorators: [],
-    price_ranges: null,
+    namePrefix: null,
+    brand: null,
+    qualityCue: null,
+    imageId: `image-${id}`,
+    displayPrice: 199,
+    originalPrice: null,
+    unitPrice: null,
+    priceRanges: null,
+    unitQuantity: "500 gram",
+    labels: [],
+    isUnavailable: false,
+    numberOfOrders: null,
   }
+}
+
+/** A search whose results come in one section. */
+function searchResults(products: unknown[]) {
+  return [products]
 }
 
 async function loadTools() {
@@ -47,10 +77,10 @@ describe("picnic_search_many", () => {
   })
 
   it("returns the top results per query, in input order, with each query's total", async () => {
-    mocks.search.mockImplementation(async (query: string) =>
+    mocks.searchSections.mockImplementation(async (query: string) =>
       query === "broccoli"
-        ? [sellingUnit("s1", "Broccoli")]
-        : [sellingUnit("s2", "Kipfilet"), sellingUnit("s3", "Kipdijfilet")],
+        ? searchResults([productTile("s1", "Broccoli")])
+        : searchResults([productTile("s2", "Kipfilet"), productTile("s3", "Kipdijfilet")]),
     )
 
     const toolRegistry = await loadTools()
@@ -61,7 +91,7 @@ describe("picnic_search_many", () => {
       }),
     )
 
-    expect(mocks.search.mock.calls).toEqual([["kipfilet"], ["broccoli"]])
+    expect(mocks.searchSections.mock.calls).toEqual([["kipfilet"], ["broccoli"]])
     expect(payload.searches).toEqual([
       {
         query: "kipfilet",
@@ -81,7 +111,7 @@ describe("picnic_search_many", () => {
   })
 
   it("returns the same compact fields as picnic_search", async () => {
-    mocks.search.mockResolvedValue([sellingUnit("s1", "Broccoli")])
+    mocks.searchSections.mockResolvedValue(searchResults([productTile("s1", "Broccoli")]))
 
     const toolRegistry = await loadTools()
     const single = parseToolResult(
@@ -95,9 +125,9 @@ describe("picnic_search_many", () => {
   })
 
   it("reports a failed query in its own entry without failing the others", async () => {
-    mocks.search.mockImplementation(async (query: string) => {
+    mocks.searchSections.mockImplementation(async (query: string) => {
       if (query === "kapot") throw new Error("Picnic search failed")
-      return [sellingUnit("s1", "Ui")]
+      return searchResults([productTile("s1", "Ui")])
     })
 
     const toolRegistry = await loadTools()
@@ -116,12 +146,12 @@ describe("picnic_search_many", () => {
   it("runs the searches concurrently, at most five at a time", async () => {
     let inFlight = 0
     let maxInFlight = 0
-    mocks.search.mockImplementation(async (query: string) => {
+    mocks.searchSections.mockImplementation(async (query: string) => {
       inFlight++
       maxInFlight = Math.max(maxInFlight, inFlight)
       await new Promise((resolve) => setTimeout(resolve, 5))
       inFlight--
-      return [sellingUnit(query, query)]
+      return searchResults([productTile(query, query)])
     })
 
     const toolRegistry = await loadTools()
@@ -130,9 +160,26 @@ describe("picnic_search_many", () => {
       await toolRegistry.executeTool("picnic_search_many", { queries }),
     )
 
-    expect(mocks.search).toHaveBeenCalledTimes(12)
+    expect(mocks.searchSections).toHaveBeenCalledTimes(12)
     expect(maxInFlight).toBe(5)
     expect(payload.searches.map((search: { query: string }) => search.query)).toEqual(queries)
+  })
+
+  // Picnic lists products bought before in a section of their own, ahead of the product groups
+  // that hold them too.
+  it("lists a product that appears in several sections once, at its first place", async () => {
+    mocks.searchSections.mockResolvedValue([
+      [productTile("s2", "Kipfilet")],
+      [productTile("s1", "Kipfilet bio"), productTile("s2", "Kipfilet")],
+    ])
+
+    const toolRegistry = await loadTools()
+    const payload = parseToolResult(
+      await toolRegistry.executeTool("picnic_search", { query: "kipfilet" }),
+    )
+
+    expect(payload.results.map((result: { id: string }) => result.id)).toEqual(["s2", "s1"])
+    expect(payload.pagination.total).toBe(2)
   })
 
   it("rejects an empty batch, a blank query and more than 25 queries before calling Picnic", async () => {
@@ -143,7 +190,7 @@ describe("picnic_search_many", () => {
         /Invalid input/,
       )
     }
-    expect(mocks.search).not.toHaveBeenCalled()
+    expect(mocks.searchSections).not.toHaveBeenCalled()
   })
 
   it("is marked read-only", async () => {
@@ -156,6 +203,12 @@ describe("picnic_search_many", () => {
   })
 })
 
+/** Allergens as the product page shows them: badges under "Bevat" and "Bevat mogelijk". */
+function allergenGroups(contains: string[], mayContain: string[] = []) {
+  const badge = (text: string) => ({ text, textColor: "#000000", backgroundColor: "#ffffff" })
+  return { contains: contains.map(badge), mayContain: mayContain.map(badge) }
+}
+
 function productDetails(overrides: Record<string, unknown> = {}) {
   return {
     id: "s100",
@@ -167,14 +220,13 @@ function productDetails(overrides: Record<string, unknown> = {}) {
     maxCount: 50,
     imageIds: ["image-s100"],
     description: null,
-    highlights: [],
-    allergens: [],
+    highlightItems: [],
+    allergenGroups: allergenGroups([]),
     infoSections: [
       { title: "Ingrediënten", content: "kipfilet (100%)" },
       { title: "Voedingswaarde", content: "Energie 450 kJ" },
     ],
     promotion: null,
-    bundles: [],
     priceRanges: null,
     similarProducts: [],
     ...overrides,
@@ -187,12 +239,12 @@ describe("picnic_check_products", () => {
   })
 
   it("returns name, brand, allergens and the ingredients text for each product", async () => {
-    mocks.getProductDetails.mockResolvedValue(
+    mocks.getProduct.mockResolvedValue(
       productDetails({
         id: "s200",
         name: "Pesto verde",
         brand: "Barilla",
-        allergens: ["Melk", "Cashewnoten"],
+        allergenGroups: allergenGroups(["Melk", "Cashewnoten"]),
         infoSections: [
           { title: "Extra informatie", content: "Na openen gekoeld bewaren" },
           { title: "Ingrediënten", content: "basilicum (38%), zonnebloemolie, **kaas** (melk)" },
@@ -205,7 +257,7 @@ describe("picnic_check_products", () => {
       await toolRegistry.executeTool("picnic_check_products", { product_ids: ["s200"] }),
     )
 
-    expect(mocks.getProductDetails).toHaveBeenCalledWith("s200")
+    expect(mocks.getProduct).toHaveBeenCalledWith("s200")
     // Without flag_keywords there is nothing to flag, so no flags field.
     expect(payload.products).toEqual([
       {
@@ -219,7 +271,7 @@ describe("picnic_check_products", () => {
   })
 
   it("flags keywords in name, ingredients and allergens, ignoring case and accents", async () => {
-    mocks.getProductDetails.mockImplementation(async (id: string) => {
+    mocks.getProduct.mockImplementation(async (id: string) => {
       if (id === "s1") {
         return productDetails({
           id,
@@ -230,7 +282,11 @@ describe("picnic_check_products", () => {
         })
       }
       if (id === "s2") {
-        return productDetails({ id, name: "Crème fraîche", allergens: ["Melk"] })
+        return productDetails({
+          id,
+          name: "Crème fraîche",
+          allergenGroups: allergenGroups(["Melk"]),
+        })
       }
       return productDetails({ id, name: "Broccoli", infoSections: [] })
     })
@@ -253,7 +309,7 @@ describe("picnic_check_products", () => {
   // Matching inside words is what catches compounds like varkensvlees, so it also hits words
   // that merely contain the keyword. Reporting the word lets the caller see that.
   it("reports the words a keyword was found in, so accidental hits are recognisable", async () => {
-    mocks.getProductDetails.mockResolvedValue(
+    mocks.getProduct.mockResolvedValue(
       productDetails({
         name: "Roerbakgroente",
         infoSections: [{ title: "Ingrediënten", content: "champignons, paprika, ui" }],
@@ -273,7 +329,7 @@ describe("picnic_check_products", () => {
 
   // An empty flags object must not read as "clean" when there was nothing to search.
   it("returns ingredients as null when the product has no ingredients section", async () => {
-    mocks.getProductDetails.mockResolvedValue(
+    mocks.getProduct.mockResolvedValue(
       productDetails({
         brand: null,
         infoSections: [{ title: "Voedingswaarde", content: "Energie 450 kJ" }],
@@ -297,8 +353,28 @@ describe("picnic_check_products", () => {
     })
   })
 
+  it("lists traces apart from the allergens and flags keywords in them too", async () => {
+    mocks.getProduct.mockResolvedValue(
+      productDetails({ allergenGroups: allergenGroups(["Melk"], ["Noten", "Pinda's"]) }),
+    )
+
+    const toolRegistry = await loadTools()
+    const payload = parseToolResult(
+      await toolRegistry.executeTool("picnic_check_products", {
+        product_ids: ["s100"],
+        flag_keywords: ["noten"],
+      }),
+    )
+
+    expect(payload.products[0]).toMatchObject({
+      allergens: ["Melk"],
+      may_contain: ["Noten", "Pinda's"],
+      flags: { noten: ["noten"] },
+    })
+  })
+
   it("reports a failing product in its own entry without failing the others", async () => {
-    mocks.getProductDetails.mockImplementation(async (id: string) => {
+    mocks.getProduct.mockImplementation(async (id: string) => {
       if (id === "s404") throw new Error("Product not found")
       return productDetails({ id })
     })
@@ -325,7 +401,7 @@ describe("picnic_check_products", () => {
         product_ids: Array.from({ length: 21 }, (_, index) => `s${index}`),
       }),
     ).rejects.toThrow(/Invalid input/)
-    expect(mocks.getProductDetails).not.toHaveBeenCalled()
+    expect(mocks.getProduct).not.toHaveBeenCalled()
   })
 
   it("is marked read-only", async () => {

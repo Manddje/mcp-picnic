@@ -28,7 +28,7 @@ vi.mock("picnic-api", () => ({
       },
       cart: { getCart: mockGetCart },
       // Wrapped by the client's session recovery; these tests never send through it.
-      sendRequest: vi.fn(),
+      sendRequestWithHeaders: vi.fn(),
     }
     return client
   }),
