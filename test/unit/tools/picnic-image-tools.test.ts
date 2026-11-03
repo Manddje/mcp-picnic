@@ -2,13 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const mocks = vi.hoisted(() => ({
   getImage: vi.fn(),
-  search: vi.fn(),
+  getSearchResults: vi.fn(),
   initializePicnicClient: vi.fn(),
 }))
 
 vi.mock("../../../src/utils/picnic-client.js", () => ({
   getPicnicClient: () => ({
-    catalog: { getImage: mocks.getImage, search: mocks.search },
+    catalog: { getImage: mocks.getImage, getSearchResults: mocks.getSearchResults },
     sendRequest: vi.fn(),
   }),
   initializePicnicClient: mocks.initializePicnicClient,
@@ -73,7 +73,9 @@ describe("picnic_get_image", () => {
 
   it("still serializes ordinary object results as text", async () => {
     const { toolRegistry } = await import("../../../src/tools/registry.js")
-    mocks.search.mockResolvedValue([{ id: "s1", name: "Bananen", display_price: 169 }])
+    mocks.getSearchResults.mockResolvedValue({
+      products: { sections: [{ products: [{ id: "s1", name: "Bananen", displayPrice: 169 }] }] },
+    })
 
     const result = await toolRegistry.executeTool("picnic_search", { query: "x", limit: 1 })
 

@@ -79,14 +79,14 @@ Look up product details by selling unit ID.
 
 #### `picnic_check_products`
 
-Check up to 20 products in one call, e.g. for dietary needs. Returns each product's name, brand, allergens and ingredients text (from the product page's ingredients section), fetched concurrently (at most five at a time).
+Check up to 20 products in one call, e.g. for dietary needs. Returns each product's name, brand, allergens, `may_contain` (traces, when Picnic lists any) and ingredients text (from the product page's ingredients section), fetched concurrently (at most five at a time).
 
 **Parameters:**
 
 - `product_ids` (array of strings): Product (selling unit) IDs, up to 20
 - `flag_keywords` (array of strings, optional): Words to look for, e.g. `["varken", "spek", "vis", "lactose"]`
 
-**Returns:** One entry per product, in input order. With `flag_keywords`, each entry also has `flags`: the keywords found in the product's name, allergens or ingredients, each with the words it was found in. Matching ignores case and accents and also finds keywords inside longer words, which catches compounds (`varken` finds `varkensvlees`) but also accidental hits (`ham` finds `champignons`); the reported words show which is which. An empty `flags` is no proof of absence: `ingredients` is `null` when Picnic lists none. A product that fails gets an entry with its `error`; the others are unaffected.
+**Returns:** One entry per product, in input order. With `flag_keywords`, each entry also has `flags`: the keywords found in the product's name, allergens, traces or ingredients, each with the words it was found in. Matching ignores case and accents and also finds keywords inside longer words, which catches compounds (`varken` finds `varkensvlees`) but also accidental hits (`ham` finds `champignons`); the reported words show which is which. An empty `flags` is no proof of absence: `ingredients` is `null` when Picnic lists none. A product that fails gets an entry with its `error`; the others are unaffected.
 
 #### `picnic_get_image`
 
@@ -113,14 +113,14 @@ Get product image data.
 
 #### `picnic_get_cart`
 
-Get the current shopping cart contents.
+Get the current shopping cart contents: one entry per product with its `product_id`, name, unit, `quantity` and line `price` (after discounts; `original_price` when discounted), the recipes in the cart, and the totals. `total_price` is the amount to pay, including the deposits in `deposit_total`. Prices are in cents.
 
 #### `picnic_get_overview`
 
 Get a compact status overview in one call, without the cart's contents:
 
 - `cart`: `total_count`, `total_price` and `total_savings`
-- `selected_slot`: the selected delivery slot's window, cut-off time, minimum order value and `missing_for_minimum` (the minimum order value minus `total_price`, at least 0); `null` when no slot is selected
+- `selected_slot`: the selected delivery slot's window, cut-off time, minimum order value and `missing_for_minimum` (the minimum order value minus the products total without deposits, at least 0); `null` when no slot is selected
 - `current_deliveries`: each current delivery's ID, status, delivery window and, once Picnic has one, estimated arrival window
 
 Prices are in cents.
@@ -136,9 +136,9 @@ Add a product to the shopping cart.
 
 #### `picnic_add_products_to_cart`
 
-Add several products to the shopping cart in one request (`POST /cart/products/add`). Repeated product IDs are merged. Returns the resulting cart.
+Add several products to the shopping cart in one call. The products are added one by one, in order, and each `count` is added to what is already in the cart; repeated product IDs are merged. Returns the resulting cart.
 
-**Unverified:** it is not yet confirmed whether this endpoint adds `count` to a product already in the cart or sets its quantity to `count`. Until that is verified, check the quantities with `picnic_get_cart` afterwards, especially for products that were already in the cart. Like the other cart mutations it is not idempotent: if it fails, check the cart before retrying.
+A product that fails is listed under `failed` and does not stop the others; the cart is then read again, because a failed add may still have landed. Like the other cart mutations it is not idempotent: check the cart before retrying a failed product.
 
 **Parameters:**
 
@@ -165,7 +165,7 @@ Get the delivery time slots. Each slot has its `slotId`, window, cut-off time, a
 
 #### `picnic_set_delivery_slot`
 
-Select a delivery time slot.
+Select a delivery time slot. Returns the selected slot and the cart.
 
 **Parameters:**
 
@@ -173,7 +173,7 @@ Select a delivery time slot.
 
 #### `picnic_get_deliveries`
 
-Get past and current deliveries.
+Get past and current deliveries: per delivery its ID, status, window, order count and order total in cents. Use `picnic_get_delivery` for its products and the amount paid.
 
 **Parameters:**
 
@@ -199,7 +199,7 @@ Get real-time position data for a delivery.
 
 #### `picnic_get_delivery_scenario`
 
-Get driver and route information for a delivery.
+Get driver and route information for a delivery: the route points, driver, vehicle and destination. The vehicle image is left out (`hasVehicleImage` says whether there is one).
 
 **Parameters:**
 

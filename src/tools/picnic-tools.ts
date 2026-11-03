@@ -88,57 +88,42 @@ const LOCAL_READ_ONLY_ANNOTATIONS = {
   openWorldHint: false,
 } as const
 
-// Helper function to filter cart data for LLM consumption
-function filterCartData(cart: unknown) {
-  if (!cart || typeof cart !== "object") return cart
-
-  const cartObj = cart as {
-    type?: string
-    id?: string
-    items?: Array<{
-      id?: string
-      display_price?: number
-      price?: number
-      items?: Array<{
-        id?: string
-        name?: string
-        unit_quantity?: string
-        price?: number
-        image_ids?: string[]
-        max_count?: number
-        decorators?: Array<{ type?: string; quantity?: number }>
-      }>
-    }>
-    total_count?: number
-    total_price?: number
-    checkout_total_price?: number
-    total_savings?: number
-  }
-
-  const filteredItems = cartObj.items?.map((orderLine) => ({
-    order_line_id: orderLine.id,
-    price: orderLine.display_price || orderLine.price,
-    articles: orderLine.items?.map((article) => ({
-      product_id: article.id,
-      name: article.name,
-      unit: article.unit_quantity,
-      price: article.price,
-      // How many of this article are in the cart. Picnic carries it in a QUANTITY decorator
-      // rather than a plain field; without it a caller cannot tell one unit from three, so it
-      // cannot check whether an ambiguous add actually landed (see mutateCart).
-      quantity: article.decorators?.find((d) => d.type === "QUANTITY")?.quantity ?? 1,
-      ...(article.image_ids?.length && { image_id: article.image_ids[0] }),
-    })),
-  }))
-
+/**
+ * The cart fields the cart tools return. Amounts are in cents; each line is one product with
+ * its quantity, so a caller can check whether an ambiguous add actually landed (see mutateCart).
+ */
+function filterCartData(cart: Cart) {
   return {
-    type: cartObj.type,
-    id: cartObj.id,
-    items: filteredItems,
-    total_count: cartObj.total_count,
-    total_price: cartObj.total_price,
-    checkout_total_price: cartObj.checkout_total_price,
-    total_savings: cartObj.total_savings,
+    id: cart.id,
+    items: cart.items.map((line) => ({
+      order_line_id: line.id,
+      product_id: line.productId,
+      name: line.name,
+      unit: line.unitQuantity,
+      quantity: line.quantity,
+      // The price of the whole line, after discounts.
+      price: line.displayPrice,
+      ...(line.originalPrice !== null && { original_price: line.originalPrice }),
+      ...(line.imageId && { image_id: line.imageId }),
+      ...(line.recipeId && { recipe_id: line.recipeId }),
+      ...(line.isUnavailable && {
+        unavailable: true,
+        ...(line.unavailableReason && { unavailable_reason: line.unavailableReason }),
+      }),
+    })),
+    ...(cart.recipes.length > 0 && {
+      recipes: cart.recipes.map((recipe) => ({
+        recipe_id: recipe.id,
+        title: recipe.title,
+        ...(recipe.preTitle && { portions: recipe.preTitle }),
+      })),
+    }),
+    total_count: cart.totalCount,
+    // The amount to pay, including deposits and fees.
+    total_price: cart.totalPrice,
+    deposit_total: cart.depositTotal,
+    total_savings: cart.promotionSavings,
+    ...(cart.membershipSavings > 0 && { membership_savings: cart.membershipSavings }),
   }
 }
 
@@ -313,20 +298,39 @@ function concurrencyLimit(max: number) {
   }
 }
 
-// picnic-api does not export its domain types from the package root, so derive them.
-type CatalogService = ReturnType<typeof getPicnicClient>["catalog"]
-type SearchProduct = Awaited<ReturnType<CatalogService["search"]>>[number]
+type Product = PicnicClient.Types.catalog.Product
+type ProductTile = PicnicClient.Types.catalog.ProductTile
+type Cart = PicnicClient.Types.cart.Cart
 
 /** The compact product fields the search tools return. */
-function toSearchResult(product: SearchProduct) {
+function toSearchResult(product: ProductTile) {
   return {
     id: product.id,
     name: product.name,
-    price: product.display_price,
-    unit: product.unit_quantity,
+    price: product.displayPrice,
+    unit: product.unitQuantity,
     // Only include image_id if it exists, for potential image retrieval
-    ...(product.image_id && { image_id: product.image_id }),
+    ...(product.imageId && { image_id: product.imageId }),
   }
+}
+
+/**
+ * Searches Picnic's products, in the order the app shows them. The app groups results into
+ * sections (bought before, then one per product group) in which a product can appear more than
+ * once; the tools list each product once.
+ */
+async function searchProducts(
+  client: ReturnType<typeof getPicnicClient>,
+  query: string,
+): Promise<ProductTile[]> {
+  const results = await client.catalog.getSearchResults(query)
+  const products = new Map<string, ProductTile>()
+  for (const section of results.products?.sections ?? []) {
+    for (const product of section.products) {
+      if (!products.has(product.id)) products.set(product.id, product)
+    }
+  }
+  return [...products.values()]
 }
 
 // Search products tool
@@ -353,7 +357,7 @@ toolRegistry.register({
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const allResults = await client.catalog.search(args.query)
+    const allResults = await searchProducts(client, args.query)
 
     // Apply pagination
     const startIndex = args.offset || 0
@@ -412,7 +416,7 @@ toolRegistry.register({
     const limit = args.limit ?? 5
     const run = concurrencyLimit(BATCH_CONCURRENCY)
     const settled = await Promise.allSettled(
-      args.queries.map((query) => run(() => client.catalog.search(query))),
+      args.queries.map((query) => run(() => searchProducts(client, query))),
     )
 
     return {
@@ -473,12 +477,9 @@ toolRegistry.register({
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const page = await client.sendRequest(
-      "GET",
-      "/pages/promo-page-all-promos-redirect",
-      null,
-      true,
-    )
+    const page = await client.sendRequest("GET", "/pages/promo-page-all-promos-redirect", null, {
+      includePicnicHeaders: true,
+    })
     const matching = selectPromotions(
       extractPromotionsFromPage(page),
       args.query,
@@ -555,7 +556,7 @@ toolRegistry.register({
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const details = await client.catalog.getProductDetails(args.productId)
+    const details = await client.catalog.getProduct(args.productId)
 
     if (args.full) {
       return details
@@ -580,15 +581,13 @@ const CHECK_PRODUCTS_MAX = 20
 // Words reported per flagged keyword: enough to tell a real hit from an accidental one.
 const FLAG_WORDS_MAX = 3
 
-type ProductDetails = Awaited<ReturnType<CatalogService["getProductDetails"]>>
-
 // Ingredients section titles after normalizeText: "Ingrediënten" (NL), "Ingrédients" (FR) and
 // "Zutaten" (DE).
 const INGREDIENTS_TITLE_RE = /ingredi|zutaten/
 const WORD_CHAR_RE = /[\p{L}\p{N}]/u
 
 /** The text of a product's ingredients section without markdown emphasis, or null if none. */
-function getIngredientsText(details: ProductDetails): string | null {
+function getIngredientsText(details: Product): string | null {
   const text = (details.infoSections ?? [])
     .filter((section) => INGREDIENTS_TITLE_RE.test(normalizeText(section.title)))
     .map((section) => section.content.replace(/\*\*|__/g, "").trim())
@@ -619,20 +618,22 @@ function findKeywordWords(text: string, keyword: string): string[] {
 }
 
 /** The fields a dietary check needs, plus the keyword hits when keywords are given. */
-function toProductCheck(details: ProductDetails, keywords: string[] | undefined) {
-  const allergens = details.allergens ?? []
+function toProductCheck(details: Product, keywords: string[] | undefined) {
+  const allergens = details.allergenGroups.contains.map((badge) => badge.text)
+  const mayContain = details.allergenGroups.mayContain.map((badge) => badge.text)
   const ingredients = getIngredientsText(details)
   const check = {
     id: details.id,
     name: details.name,
     ...(details.brand && { brand: details.brand }),
     allergens,
+    ...(mayContain.length > 0 && { may_contain: mayContain }),
     // null rather than left out, so a missing ingredients list cannot pass for a clean one
     ingredients,
   }
   if (!keywords?.length) return check
 
-  const texts = [details.name, ingredients ?? "", ...allergens]
+  const texts = [details.name, ingredients ?? "", ...allergens, ...mayContain]
   const flags: Record<string, string[]> = {}
   for (const keyword of keywords) {
     const words = [...new Set(texts.flatMap((text) => findKeywordWords(text, keyword)))]
@@ -645,8 +646,8 @@ toolRegistry.register({
   name: "picnic_check_products",
   description:
     "Check up to 20 products in one call, e.g. for dietary needs: returns each product's name, " +
-    "brand, allergens and ingredients text. With flag_keywords it also lists, per product, " +
-    "which keywords occur in its name, allergens or ingredients and in which words, so " +
+    "brand, allergens, may_contain (traces) and ingredients text. With flag_keywords it also " +
+    "lists, per product, which keywords occur in its name, allergens or ingredients and in which words, so " +
     "accidental hits (ham in champignons) can be dismissed. No flags is no proof of absence: " +
     "ingredients is null when Picnic lists none. A product that fails gets an entry with its " +
     "error and does not fail the others.",
@@ -673,7 +674,7 @@ toolRegistry.register({
     const client = getPicnicClient()
     const run = concurrencyLimit(BATCH_CONCURRENCY)
     const settled = await Promise.allSettled(
-      args.product_ids.map((id) => run(() => client.catalog.getProductDetails(id))),
+      args.product_ids.map((id) => run(() => client.catalog.getProduct(id))),
     )
 
     return {
@@ -754,19 +755,9 @@ toolRegistry.register({
     await ensureClientInitialized()
     const client = getPicnicClient()
 
-    let format: "fusion" | "rsc" = "fusion"
-    let page: unknown
-    try {
-      page = await client.app.getPage(args.page_id)
-    } catch (error) {
-      if (!PicnicClient.isUnexpectedPageFormatError(error) || error.receivedFormat !== "rsc") {
-        throw error
-      }
-      format = "rsc"
-      page = await client.app.getRscPage(args.page_id)
-    }
-
-    const json = JSON.stringify(page)
+    const page = await client.app.getPage(args.page_id)
+    const format = page.format
+    const json = JSON.stringify(page.format === "fusion" ? page.page : page.content)
     const offset = args.offset ?? 0
     const maxChars = args.max_chars ?? 20000
     const content = json.slice(offset, offset + maxChars)
@@ -790,18 +781,10 @@ toolRegistry.register({
 // called directly via sendRequest because the picnic-api recipe.* page methods
 // target outdated ids (recipe-details-page-root) that the API answers with 404.
 
-// picnic-api does not export its domain types from the package root, so derive them.
-type RecipeService = ReturnType<typeof getPicnicClient>["recipe"]
-type AssignSellingGroupToBasketResult = Awaited<
-  ReturnType<RecipeService["assignSellingGroupToBasket"]>
->
-type RemoveSellingGroupFromBasketResult = Awaited<
-  ReturnType<RecipeService["removeSellingGroupFromBasket"]>
->
-type RecipeDetails = Awaited<ReturnType<RecipeService["getRecipe"]>>
-type SellingGroupSwapType = NonNullable<
-  Parameters<RecipeService["updateUserDefinedRecipeIngredient"]>[4]
->
+type AddRecipeToCartResult = PicnicClient.Types.recipe.RawAddRecipeToCartResult
+type RemoveRecipeFromCartResult = PicnicClient.Types.recipe.RawRemoveRecipeFromCartResult
+type RecipeDetails = PicnicClient.Types.recipe.Recipe
+type RecipeIngredientSwapType = PicnicClient.Types.recipe.RecipeIngredientSwapType
 
 // Base URL for recipe/product image derivatives, derived from the API URL, e.g.
 // https://storefront-prod.de.picnicinternational.com/static/images
@@ -814,7 +797,9 @@ const RECIPE_CATEGORY_PAGE_ID_RE = /recipe[_-]cattree[_-][a-z0-9]+(?:[a-z0-9_-]*
 const RECIPE_CATEGORY_PREFIX_RE = /^recipe[_-]cattree[_-]/i
 
 async function fetchRecipePage(client: ReturnType<typeof getPicnicClient>, pageId: string) {
-  const page = await client.sendRequest("GET", `/pages/${pageId}`, null, true)
+  const page = await client.sendRequest("GET", `/pages/${pageId}`, null, {
+    includePicnicHeaders: true,
+  })
   return { pageId, page }
 }
 
@@ -953,7 +938,10 @@ toolRegistry.register({
     const client = getPicnicClient()
     const recipeId = await resolveRecipeId(args.recipe_url_or_id)
     const page = await readRecipe(
-      () => client.sendRequest("GET", recipeDetailsPagePath(recipeId, args.portions), null, true),
+      () =>
+        client.sendRequest("GET", recipeDetailsPagePath(recipeId, args.portions), null, {
+          includePicnicHeaders: true,
+        }),
       args.portions,
     )
     const parsed = parseSellingGroupRecipe(page, { imageBaseUrl: recipeImageBaseUrl(client) })
@@ -1069,7 +1057,7 @@ toolRegistry.register({
       "POST",
       "/pages/task/recipe-saving",
       { payload: { recipe_id: recipeId, saved_at: new Date().toISOString() } },
-      true,
+      { includePicnicHeaders: true },
     )
     return { message: "Recipe saved", recipeId }
   },
@@ -1094,7 +1082,7 @@ toolRegistry.register({
       "POST",
       "/pages/task/recipe-saving",
       { payload: { recipe_id: recipeId, saved_at: null } },
-      true,
+      { includePicnicHeaders: true },
     )
     return { message: "Recipe removed from cookbook", recipeId }
   },
@@ -1128,11 +1116,11 @@ toolRegistry.register({
     const payload: { selling_group_id: string; portions?: number } = { selling_group_id: recipeId }
     if (args.portions !== undefined) payload.portions = args.portions
     const result = await mutateCart("Adding the recipe to the cart", () =>
-      client.sendRequest<unknown, Partial<AssignSellingGroupToBasketResult> | null>(
+      client.sendRequest<unknown, Partial<AddRecipeToCartResult> | null>(
         "POST",
         "/pages/task/assign-selling-group-to-basket",
         { payload },
-        true,
+        { includePicnicHeaders: true },
       ),
     )
     const assignedPortions = result?.assignedNumberOfPortions ?? args.portions
@@ -1160,11 +1148,11 @@ toolRegistry.register({
     const client = getPicnicClient()
     const recipeId = await resolveRecipeId(args.recipe_url_or_id)
     const result = await mutateCart("Removing the recipe from the cart", () =>
-      client.sendRequest<unknown, Partial<RemoveSellingGroupFromBasketResult> | null>(
+      client.sendRequest<unknown, Partial<RemoveRecipeFromCartResult> | null>(
         "POST",
         "/pages/task/remove-selling-group-from-basket",
         { payload: { selling_group_id: recipeId } },
-        true,
+        { includePicnicHeaders: true },
       ),
     )
     return {
@@ -1355,7 +1343,8 @@ toolRegistry.register({
     const recipeId = await resolveRecipeId(args.recipe_url_or_id)
     const details = await readRecipe(
       () =>
-        client.recipe.getRecipe(recipeId, args.portions, {
+        client.recipe.getRecipe(recipeId, {
+          portions: args.portions,
           resolveIngredientNames: args.resolve_names ?? true,
         }),
       args.portions,
@@ -1574,16 +1563,14 @@ toolRegistry.register({
     // The app appends the new ingredient after the existing ones and states the portion count
     // its quantity is for, so read both from the recipe.
     const details = await readRecipe(
-      () => client.recipe.getRecipe(recipeId, args.portions),
+      () => client.recipe.getRecipe(recipeId, { portions: args.portions }),
       args.portions,
     )
-    const result = await client.recipe.addUserDefinedRecipeIngredient(
-      recipeId,
-      args.product_id,
+    const result = await client.recipe.addUserDefinedRecipeIngredient(recipeId, args.product_id, {
       quantity,
-      details.portions,
-      countIngredients(details),
-    )
+      portions: details.portions,
+      order: countIngredients(details),
+    })
     return {
       message: "Ingredient added",
       recipeId,
@@ -1620,7 +1607,7 @@ toolRegistry.register({
     const client = getPicnicClient()
     const recipeId = await resolveRecipeId(args.recipe_url_or_id)
     const details = await readRecipe(
-      () => client.recipe.getRecipe(recipeId, args.portions),
+      () => client.recipe.getRecipe(recipeId, { portions: args.portions }),
       args.portions,
     )
 
@@ -1651,31 +1638,27 @@ toolRegistry.register({
     if (currentProductIds.length > 1) {
       for (const id of currentProductIds) if (id !== productId) quantities[id] = 0
     }
-    let swapType: SellingGroupSwapType | undefined
+    let swapType: RecipeIngredientSwapType | undefined
     if (!currentProductIds.includes(productId)) swapType = "SEARCH_SELECTION"
     else if (currentProductIds.length > 1) swapType = "WITHIN_SELLING_GROUP_COMPONENT"
     else swapType = current[0].swapType ?? undefined
 
-    const result = await client.recipe.updateUserDefinedRecipeIngredient(
-      recipeId,
-      args.ingredient_id,
+    const result = await client.recipe.updateRecipeIngredient(recipeId, args.ingredient_id, {
       quantities,
-      details.portions,
+      portions: details.portions,
       swapType,
-    )
+    })
 
     // When the recipe is in the cart, the edit removes the replaced product but leaves adding
     // the new selection to a follow-up call, without which the cart lacks the ingredient.
     let cartUpdated = false
     if (result?.shouldUpdateCart) {
       await mutateCart("Updating the ingredient in the cart", () =>
-        client.recipe.assignSellableComponentToDay(
-          recipeId,
-          args.ingredient_id,
-          { [productId]: args.quantity },
-          details.portions,
-          swapType ?? "WITHIN_SELLING_GROUP_COMPONENT",
-        ),
+        client.recipe.updateRecipeIngredientInCart(recipeId, args.ingredient_id, {
+          quantities: { [productId]: args.quantity },
+          portions: details.portions,
+          swapType: swapType ?? "WITHIN_SELLING_GROUP_COMPONENT",
+        }),
       )
       cartUpdated = true
     }
@@ -1706,7 +1689,7 @@ toolRegistry.register({
     await ensureClientInitialized()
     const client = getPicnicClient()
     const recipeId = await resolveRecipeId(args.recipe_url_or_id)
-    await client.recipe.removeUserDefinedRecipeIngredient(recipeId, args.ingredient_id)
+    await client.recipe.removeRecipeIngredient(recipeId, args.ingredient_id)
     return { message: "Ingredient removed", recipeId, ingredientId: args.ingredient_id }
   },
 })
@@ -1864,7 +1847,10 @@ async function fetchRecipeIngredientsByRef(
 ) {
   const recipeId = await resolveRecipeId(recipeUrlOrId)
   const page = await readRecipe(
-    () => client.sendRequest("GET", recipeDetailsPagePath(recipeId, portions), null, true),
+    () =>
+      client.sendRequest("GET", recipeDetailsPagePath(recipeId, portions), null, {
+        includePicnicHeaders: true,
+      }),
     portions,
   )
   const parsed = parseRecipeIngredients(page)
@@ -1994,38 +1980,41 @@ toolRegistry.register({
 // Answers "where do things stand?" in one call: cart totals, the selected delivery slot and how
 // far the cart is from that slot's minimum order value, and deliveries under way. The full cart
 // contents and slot list stay with picnic_get_cart and picnic_get_delivery_slots.
-type Cart = Awaited<ReturnType<ReturnType<typeof getPicnicClient>["cart"]["getCart"]>>
-type Delivery = Awaited<
-  ReturnType<ReturnType<typeof getPicnicClient>["delivery"]["getDeliveries"]>
->[number]
+type DeliverySlots = PicnicClient.Types.cart.DeliverySlots
+type RawDeliverySummary = PicnicClient.Types.delivery.RawDeliverySummary
+
+/** The cart's products total in cents: the line prices, without deposits and fees. */
+function productsTotal(cart: Cart): number {
+  return cart.items.reduce((total, line) => total + line.displayPrice, 0)
+}
 
 /** The selected delivery slot, with how much the cart still lacks to reach its minimum. */
-function summarizeSelectedSlot(cart: Cart) {
-  const selection = cart.selected_slot
+function summarizeSelectedSlot(cart: Cart, slots: DeliverySlots) {
+  const selection = cart.selectedSlot ?? slots.selectedSlot
   const slot =
-    cart.delivery_slots?.find((candidate) => candidate.slot_id === selection?.slot_id) ??
-    cart.delivery_slots?.find((candidate) => candidate.selected)
+    slots.slots.find((candidate) => candidate.slotId === selection?.slotId) ??
+    slots.slots.find((candidate) => candidate.isSelected)
   if (!slot) {
-    return selection?.slot_id ? { slot_id: selection.slot_id, state: selection.state } : null
+    return selection?.slotId ? { slot_id: selection.slotId, state: selection.state } : null
   }
 
-  const minimum = slot.minimum_order_value
+  const minimum = slot.minimumOrderValue ?? cart.minimumOrderValue
   return {
-    slot_id: slot.slot_id,
+    slot_id: slot.slotId,
     ...(selection?.state && { state: selection.state }),
-    window_start: slot.window_start,
-    window_end: slot.window_end,
-    cut_off_time: slot.cut_off_time,
-    ...(slot.is_available === false && { is_available: false }),
-    ...(minimum !== undefined && {
+    window_start: slot.windowStart,
+    window_end: slot.windowEnd,
+    cut_off_time: slot.cutOffTime,
+    ...(!slot.isAvailable && { is_available: false }),
+    ...(minimum !== null && {
       minimum_order_value: minimum,
-      missing_for_minimum: Math.max(0, minimum - (cart.total_price ?? 0)),
+      missing_for_minimum: Math.max(0, minimum - productsTotal(cart)),
     }),
   }
 }
 
 /** A delivery's status and timing, without its orders. */
-function summarizeDelivery(delivery: Delivery) {
+function summarizeDelivery(delivery: RawDeliverySummary) {
   return {
     delivery_id: delivery.delivery_id,
     status: delivery.status,
@@ -2041,26 +2030,30 @@ toolRegistry.register({
   description:
     "Get a compact status overview in one call: cart totals (total_count, total_price, " +
     "total_savings), the selected delivery slot (window, cut-off time, minimum order value and " +
-    "missing_for_minimum, the minimum minus total_price) and current deliveries (window, " +
-    "estimated arrival, status). Prices are in cents. Use picnic_get_cart for the cart's " +
-    "contents and picnic_get_delivery_slots for other slots.",
+    "missing_for_minimum, the minimum minus the products total without deposits) and current " +
+    "deliveries (window, estimated arrival, status). Prices are in cents. Use picnic_get_cart " +
+    "for the cart's contents and picnic_get_delivery_slots for other slots.",
   inputSchema: z.object({}),
   annotations: READ_ONLY_ANNOTATIONS,
   handler: async () => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const [cart, deliveries] = await Promise.all([
+    const [cart, slots, deliveries] = await Promise.all([
       client.cart.getCart(),
-      client.delivery.getDeliveries(["CURRENT"]),
+      client.cart.getDeliverySlots(),
+      // The raw summaries, because the summary model leaves out the estimated arrival (eta2).
+      client.sendRequest<string[], RawDeliverySummary[]>("POST", "/deliveries/summary", [
+        "CURRENT",
+      ]),
     ])
 
     return {
       cart: {
-        total_count: cart.total_count,
-        total_price: cart.total_price,
-        total_savings: cart.total_savings,
+        total_count: cart.totalCount,
+        total_price: cart.totalPrice,
+        total_savings: cart.promotionSavings,
       },
-      selected_slot: summarizeSelectedSlot(cart),
+      selected_slot: summarizeSelectedSlot(cart, slots),
       current_deliveries: deliveries.map(summarizeDelivery),
     }
   },
@@ -2094,20 +2087,19 @@ toolRegistry.register({
 
 // Bulk add-to-cart tool
 //
-// Adds a whole shopping list in one request (POST /cart/products/add) instead of one
-// picnic_add_to_cart call per product.
+// Adds a whole shopping list in one tool call instead of one picnic_add_to_cart call per
+// product. The app has no bulk route, so the products are added one by one, in order: cart
+// mutations are not run concurrently, and one failed product does not stop the others.
 const ADD_PRODUCTS_MAX = 50
 
 toolRegistry.register({
   name: "picnic_add_products_to_cart",
   description:
-    "Add several products to the shopping cart in one request, e.g. a weekly shopping list, " +
-    "instead of calling picnic_add_to_cart per product. Repeated productIds are merged. " +
-    "Unverified: Picnic's bulk endpoint may set a product's cart quantity to `count` instead " +
-    "of adding `count` to what is already there. Until that is confirmed, check the quantities " +
-    "with picnic_get_cart afterwards, especially for products that were already in the cart. " +
-    "Not idempotent: if this fails, call picnic_get_cart to check whether the add landed " +
-    "before retrying.",
+    "Add several products to the shopping cart in one call, e.g. a weekly shopping list, " +
+    "instead of calling picnic_add_to_cart per product. Each count is added to what is " +
+    "already in the cart; repeated productIds are merged. A product that fails is listed under " +
+    "failed and does not stop the others. Not idempotent: before retrying a failed product, " +
+    "check the returned cart, because the add may still have landed.",
   inputSchema: z.object({
     products: z
       .array(
@@ -2125,24 +2117,40 @@ toolRegistry.register({
     await ensureClientInitialized()
     const client = getPicnicClient()
 
-    // The endpoint takes one quantity per product id, so a repeated product would keep only
-    // its last count; add the counts up instead.
+    // One add per product, so a repeated product gets its counts added up.
     const counts = new Map<string, number>()
     for (const product of args.products) {
       counts.set(product.productId, (counts.get(product.productId) ?? 0) + (product.count ?? 1))
     }
-    const products = [...counts].map(([productId, quantity]) => ({ productId, quantity }))
 
-    const cart = await mutateCart(`Adding ${products.length} product(s) to cart`, () =>
-      client.cart.addProductsToCart(products),
-    )
+    let cart: Cart | undefined
+    const failed: Array<{ productId: string; count: number; error: string }> = []
+    for (const [productId, count] of counts) {
+      try {
+        cart = await client.cart.addProductToCart(productId, count)
+      } catch (error) {
+        failed.push({ productId, count, error: getErrorMessage(error) })
+      }
+    }
+    if (!cart) {
+      throw new Error(
+        `Adding ${counts.size} product(s) to cart failed: ${failed[0]?.error}. The cart may ` +
+          `still have been modified — call picnic_get_cart to check the current contents ` +
+          `before retrying, because retrying can apply the change a second time.`,
+      )
+    }
+    // A failed add may have landed anyway, so read the cart rather than show an earlier state.
+    if (failed.length > 0) cart = await client.cart.getCart()
+
+    const added = counts.size - failed.length
     return {
-      message: `Added ${products.length} product(s) to cart`,
-      // Repeated in the result, where the caller decides what to do next, until the endpoint's
-      // behaviour for products already in the cart is verified.
-      note:
-        "Unverified whether Picnic added these counts to quantities already in the cart or " +
-        "replaced them; check the quantities below.",
+      message: `Added ${added} of ${counts.size} product(s) to cart`,
+      ...(failed.length > 0 && {
+        failed,
+        note:
+          "The failed products may still have been added; check their quantities in the cart " +
+          "below before retrying them.",
+      }),
       cart: filterCartData(cart),
     }
   },
@@ -2205,7 +2213,7 @@ toolRegistry.register({
   handler: async () => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    return await client.cart.getDeliverySlotOverview()
+    return await client.cart.getDeliverySlots()
   },
 })
 
@@ -2228,11 +2236,12 @@ toolRegistry.register({
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const result = await client.cart.setDeliverySlot(args.slotId)
+    const cart = await client.cart.setDeliverySlot(args.slotId)
     return {
       message: "Delivery slot selected",
       slotId: args.slotId,
-      order: result,
+      selectedSlot: cart.selectedSlot,
+      cart: filterCartData(cart),
     }
   },
 })
@@ -2255,18 +2264,33 @@ const deliveriesInputSchema = z.object({
 
 toolRegistry.register({
   name: "picnic_get_deliveries",
-  description: "Get past and current deliveries with pagination",
+  description:
+    "Get past and current deliveries with pagination: per delivery its id, status, window, " +
+    "order count and order total in cents. Use picnic_get_delivery for its products and " +
+    "the amount paid.",
   inputSchema: deliveriesInputSchema,
   annotations: READ_ONLY_ANNOTATIONS,
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const allDeliveries = await client.delivery.getDeliveries(args.filter as string[])
+    const allDeliveries = await client.delivery.getDeliverySummaries(args.filter)
 
     // Apply pagination
     const startIndex = args.offset || 0
     const limit = args.limit || 10
-    const paginatedDeliveries = allDeliveries.slice(startIndex, startIndex + limit)
+    // Picnic's summaries carry no item counts, so picnic-api's itemCount is always 0 there; left
+    // out, it can't be read as an empty delivery. picnic_get_delivery has the real count.
+    const paginatedDeliveries = allDeliveries
+      .slice(startIndex, startIndex + limit)
+      .map((delivery) => ({
+        id: delivery.id,
+        status: delivery.status,
+        creationTime: delivery.creationTime,
+        windowStart: delivery.windowStart,
+        windowEnd: delivery.windowEnd,
+        orderCount: delivery.orderCount,
+        totalPrice: delivery.totalPrice,
+      }))
 
     return {
       deliveries: paginatedDeliveries,
@@ -2322,8 +2346,11 @@ toolRegistry.register({
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const scenario = await client.delivery.getDeliveryScenario(args.deliveryId)
-    return scenario
+    // The vehicle image is a base64 data URL: bulk without information for the caller.
+    const { vehicleImageDataUrl, ...route } = await client.delivery.getDeliveryRoute(
+      args.deliveryId,
+    )
+    return { ...route, hasVehicleImage: vehicleImageDataUrl !== null }
   },
 })
 
@@ -2348,11 +2375,10 @@ if (config.PICNIC_ENABLE_CANCEL_DELIVERY) {
     handler: async (args) => {
       await ensureClientInitialized()
       const client = getPicnicClient()
-      const result = await client.delivery.cancelDelivery(args.deliveryId)
+      await client.delivery.cancelDelivery(args.deliveryId)
       return {
         message: "Delivery cancelled",
         deliveryId: args.deliveryId,
-        result,
       }
     },
   })
@@ -2378,11 +2404,10 @@ toolRegistry.register({
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const result = await client.delivery.setDeliveryRating(args.deliveryId, args.rating)
+    await client.delivery.setDeliveryRating(args.deliveryId, args.rating)
     return {
       message: `Delivery rated ${args.rating}/10`,
       deliveryId: args.deliveryId,
-      result,
     }
   },
 })
@@ -2406,11 +2431,10 @@ toolRegistry.register({
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const result = await client.delivery.sendDeliveryInvoiceEmail(args.deliveryId)
+    await client.delivery.sendDeliveryInvoiceEmail(args.deliveryId)
     return {
       message: "Delivery invoice email sent",
       deliveryId: args.deliveryId,
-      result,
     }
   },
 })
@@ -2428,7 +2452,8 @@ toolRegistry.register({
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const orderStatus = await client.cart.getOrderStatus(args.orderId)
+    // A read of an order already placed; the checkout service's other methods are never used.
+    const orderStatus = await client.checkout.getOrderStatus(args.orderId)
     return orderStatus
   },
 })
@@ -2442,7 +2467,7 @@ toolRegistry.register({
   handler: async () => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const user = await client.user.getUserDetails()
+    const user = await client.user.getUser()
     return user
   },
 })
@@ -2510,7 +2535,7 @@ toolRegistry.register({
   handler: async (args) => {
     await ensureClientInitialized()
     const client = getPicnicClient()
-    const details = await client.payment.getWalletTransactionDetails(args.transactionId as string)
+    const details = await client.payment.getWalletTransaction(args.transactionId)
     return details
   },
 })

@@ -11,7 +11,7 @@ vi.mock("fs/promises", () => ({
   },
 }))
 
-// Mock picnic-api (v4 domain-based structure)
+// Mock picnic-api (v5 domain-based structure)
 const mockLogin = vi.fn()
 const mockGetCart = vi.fn()
 vi.mock("picnic-api", () => {
@@ -19,7 +19,8 @@ vi.mock("picnic-api", () => {
     default: vi.fn().mockImplementation((opts: any) => ({
       auth: { login: mockLogin },
       cart: { getCart: mockGetCart },
-      sendRequest: vi.fn(),
+      // Wrapped by the client's session recovery.
+      sendRequestWithHeaders: vi.fn(),
       authKey: opts?.authKey ?? "fresh-auth-key",
       url: "https://example.test/api/15",
       baseHeaders: { "x-picnic-auth": opts?.authKey ?? "fresh-auth-key" },
